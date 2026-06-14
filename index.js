@@ -1,9 +1,9 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { createHash } = require('crypto'); // <-- Solution pour "crypto is not defined"
 const qrcode = require('qrcode');
 const express = require('express');
 const bodyParser = require('body-parser');
 const pino = require('pino');
-const crypto = require('crypto'); // <-- Ajoute cette ligne pour résoudre "crypto is not defined"
 
 const app = express();
 app.use(bodyParser.json());
@@ -16,6 +16,14 @@ async function connectToWhatsApp() {
     try {
         const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
         const { version } = await fetchLatestBaileysVersion();
+
+        // Solution pour "crypto is not defined" dans Railway
+        if (!globalThis.crypto) {
+            globalThis.crypto = {
+                getRandomValues: (buffer) => require('crypto').randomBytes(buffer.length),
+                subtle: require('crypto').webcrypto.subtle,
+            };
+        }
 
         sock = makeWASocket({
             auth: state,
@@ -35,7 +43,7 @@ async function connectToWhatsApp() {
                 console.log('\n🔴 NOUVEAU QR CODE 🔴');
                 console.log('📱 Scanne ce QR code :');
                 console.log(qrCodeDataURL); // Lien data:image/png;base64,...
-                console.log('\n⚠️ Expire dans 2 minutes !');
+                console.log('\n⚠️ Ce QR code expire dans 2 minutes !');
             }
 
             if (connection === 'close') {
@@ -123,8 +131,8 @@ app.all('/send-order-alert', async (req, res) => {
 
 // 3. Lancement du serveur sur le bon port
 const PORT = process.env.PORT || 3000; // <-- Utilise process.env.PORT pour Railway
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => { // <-- Ajoute '0.0.0.0' pour Railway
     console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
-    console.log(`🌐 Endpoint : https://whatsapp-alerts-bb625547.up.railway.app/send-order-alert`);
+    console.log(`🌐 Endpoint : https://whatsapp-alerts-538e7065.up.railway.app/send-order-alert`);
     connectToWhatsApp();
 });
