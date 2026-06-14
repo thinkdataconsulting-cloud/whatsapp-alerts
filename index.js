@@ -3,14 +3,13 @@ const qrcode = require('qrcode');
 const express = require('express');
 const bodyParser = require('body-parser');
 const pino = require('pino');
-const { Boom } = require('@hapi/boom');
 
 // Fix pour "crypto is not defined" dans Railway
 if (!globalThis.crypto) {
   const crypto = require('crypto');
   globalThis.crypto = {
     getRandomValues: (buffer) => crypto.randomBytes(buffer.length),
-    subtle: crypto.webcrypto?.subtle || require('crypto').webcrypto.subtle,
+    subtle: crypto.webcrypto?.subtle || require('crypto').webcrypto?.subtle,
   };
 }
 
@@ -27,7 +26,7 @@ async function connectToWhatsApp() {
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: true,  // <-- Active le QR code en terminal
+      printQRInTerminal: false, // Désactive le QR en ASCII
       logger: pino({ level: 'error' }),
       browser: ['Gestion Stock Bot', 'Chrome', '1.0.0'],
       version: version,
@@ -39,10 +38,11 @@ async function connectToWhatsApp() {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        console.log('\n🔴 NOUVEAU QR CODE 🔴');
-        console.log('📱 Scanne ce QR code avec WhatsApp :');
+        // Génère un QR code au format image (base64)
         const qrCodeDataURL = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
-        console.log(qrCodeDataURL);  // Lien data:image/png;base64,...
+        console.log('\n🔴 NOUVEAU QR CODE 🔴');
+        console.log('📱 Ouvre ce lien dans ton navigateur pour scanner :');
+        console.log(qrCodeDataURL); // Lien data:image/png;base64,...
         console.log('\n⚠️ Ce QR code expire dans 2 minutes !');
       }
 
@@ -129,9 +129,10 @@ app.all('/send-order-alert', async (req, res) => {
   }
 });
 
+// Utilise le port dynamique de Railway
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
-  console.log(`🌐 Endpoint : https://whatsapp-alerts-8fb17541.up.railway.app/send-order-alert`);
+  console.log(`🌐 Endpoint : https://whatsapp-alerts-21a2b265.up.railway.app/send-order-alert`);
   connectToWhatsApp();
 });
