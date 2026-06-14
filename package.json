@@ -6,12 +6,14 @@
   "scripts": {
     "start": "node index.js"
   },
-  {
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.4.0",  // <-- Version stable
+    "@whiskeysockets/baileys": "^6.4.0",
     "express": "^4.18.2",
     "body-parser": "^1.20.2",
     "pino": "^8.17.2",
     "qrcode": "^1.5.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
