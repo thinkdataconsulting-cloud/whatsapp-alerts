@@ -32,7 +32,7 @@ function cleanAuthFiles() {
   const authDir = path.join(__dirname, 'auth_info_baileys');
   if (fs.existsSync(authDir)) {
     fs.rmSync(authDir, { recursive: true, force: true });
-    console.log('实用 🧹 Anciennes sessions nettoyées.');
+    console.log('🧹 Anciennes sessions nettoyées.');
   }
 }
 
@@ -59,14 +59,19 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
+    // ==========================================
+    // GESTION DU STATUT DE CONNEXION ET DU QR CODE
+    // ==========================================
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        console.log('\n🔴🔴🔴 NOUVEAU QR CODE (A SCANNER SUR RAILWAY) 🔴🔴🔴');
-        // Génère le QR code directement en blocs de texte scannables dans les logs de Railway
+        console.log('\n🔴🔴🔴 SCANNEZ LE QR CODE CI-DESSOUS 🔴🔴🔴');
+        
+        // CORRECTION TAILLE : On force un affichage ultra-compact sans interlignes doubles
         qrcode.generate(qr, { small: true });
-        console.log('🔗 Chaîne de texte brute Baileys (si besoin) :', qr);
+        
+        console.log('\n💡 CONSEIL : Si le QR code est déformé, réduisez le zoom de votre navigateur (Ctrl et -) ou passez votre console Railway en plein écran.');
       }
 
       if (connection === 'close') {
@@ -75,12 +80,12 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Déconnecté définitivement. Régénération d\'une session...');
+          console.log('⚠️ Déconnecté. Un nouveau QR code sera généré.');
           cleanAuthFiles();
           setTimeout(connectToWhatsApp, 10000);
         }
       } else if (connection === 'open') {
-        console.log('\n✅✅✅ CONNECTÉ À WHATSAPP AVEC SUCCÈS ! ✅✅✅');
+        console.log('\n✅✅✅ CONNECTÉ À WHATSAPP ! ✅✅✅');
       }
     });
 
@@ -113,7 +118,7 @@ async function connectToWhatsApp() {
 
 // ===== ENDPOINTS HTTP =====
 
-// Page d'accueil pour le monitoring Railway
+// Page d'accueil pour vérifier le monitoring Railway
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
@@ -155,7 +160,7 @@ app.post('/send-order-alert', async (req, res) => {
   }
 });
 
-// Sécurité : évite l'erreur si n8n appelle accidentellement en GET
+// Sécurité : évite l'erreur 404 si n8n appelle accidentellement en GET
 app.get('/send-order-alert', (req, res) => {
   res.status(200).json({
     status: 'success',
@@ -165,9 +170,9 @@ app.get('/send-order-alert', (req, res) => {
 });
 
 // ===== DEMARRAGE DU SERVEUR =====
+// On écoute sur 0.0.0.0 pour permettre les connexions externes de Railway vers le container
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré avec succès sur le port ${PORT}`);
-  console.log(`🌐 Endpoint cible pour n8n : https://whatsapp-alerts-08d227b3.up.railway.app/send-order-alert`);
   connectToWhatsApp();
 });
