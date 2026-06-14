@@ -3,6 +3,8 @@ const qrcode = require('qrcode');
 const express = require('express');
 const bodyParser = require('body-parser');
 const pino = require('pino');
+const fs = require('fs');
+const path = require('path');
 
 // ===== FIX POUR "crypto is not defined" =====
 const crypto = require('crypto');
@@ -26,8 +28,25 @@ app.use(bodyParser.json());
 let sock;
 const pendingOrders = new Map();
 
+// ===== FONCTION POUR FORCER UN NOUVEAU QR CODE =====
+function forceNewQRCode() {
+  const authDir = path.join(__dirname, 'auth_info_baileys');
+  if (fs.existsSync(authDir)) {
+    try {
+      fs.rmSync(authDir, { recursive: true, force: true });
+      console.log('🧹 Anciennes sessions supprimées. Nouveau QR code sera généré.');
+    } catch (err) {
+      console.error('❌ Erreur lors de la suppression des sessions :', err);
+    }
+  }
+}
+// ======================================================
+
 async function connectToWhatsApp() {
   try {
+    // Force un nouveau QR code à chaque démarrage
+    forceNewQRCode();
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
 
@@ -37,20 +56,12 @@ async function connectToWhatsApp() {
       logger: pino({ level: 'error' }),
       browser: ['Gestion Stock Bot', 'Chrome', '1.0.0'],
       version: version,
-      // ===== CONFIGURATION POUR ÉVITER LES BLOCS WHATSAPP =====
       patchMessageBeforeSending: (message) => {
-        const requiresPatch = !!(
-          message.buttonsMessage ||
-          message.listMessage ||
-          message.templateMessage
-        );
-        if (requiresPatch) {
-          message = { ...message };
-          message.patchPolicy = 'patch';
+        if (message.buttonsMessage || message.listMessage || message.templateMessage) {
+          return { ...message, patchPolicy: 'patch' };
         }
         return message;
       },
-      // ======================================================
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -60,10 +71,11 @@ async function connectToWhatsApp() {
 
       if (qr) {
         const qrCodeDataURL = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
-        console.log('\n🔴 NOUVEAU QR CODE 🔴');
+        console.log('\n🔴🔴🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴🔴🔴');
         console.log('📱 Ouvre ce lien dans ton navigateur pour scanner :');
         console.log(qrCodeDataURL);
-        console.log('\n⚠️ Ce QR code expire dans 2 minutes !');
+        console.log('\n⚠️⚠️ Ce QR code expire dans 2 minutes !');
+        console.log('⚠️ Assure-toi que ton numéro n\'est PAS connecté à un autre appareil !');
       }
 
       if (connection === 'close') {
@@ -72,11 +84,13 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Déconnecté. Rescanne le QR code.');
+          console.log('⚠️ Déconnecté. Un nouveau QR code sera généré.');
+          forceNewQRCode(); // Force un nouveau QR code
           setTimeout(connectToWhatsApp, 10000);
         }
       } else if (connection === 'open') {
-        console.log('\n✅ CONNECTÉ À WHATSAPP !');
+        console.log('\n✅✅✅ CONNECTÉ À WHATSAPP ! ✅✅✅');
+        console.log('📌 Ton serveur est prêt à envoyer des alertes.');
       }
     });
 
@@ -107,6 +121,7 @@ async function connectToWhatsApp() {
 
   } catch (error) {
     console.error('❌ Erreur dans connectToWhatsApp :', error);
+    forceNewQRCode();
     setTimeout(connectToWhatsApp, 10000);
   }
 }
@@ -152,6 +167,6 @@ app.all('/send-order-alert', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
-  console.log(`🌐 Endpoint : https://whatsapp-alerts-04af0e79.up.railway.app/send-order-alert`);
+  console.log(`🌐 Endpoint : https://whatsapp-alerts-62f6fe0e.up.railway.app/send-order-alert`);
   connectToWhatsApp();
 });
