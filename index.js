@@ -1,6 +1,14 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode');
-const express = require('express');
+const qrcode = require('qrcode-terminal');
+
+// Dans votre écouteur d'événement Baileys :
+sock.ev.on('connection.update', (update) => {
+    const { qr } = update;
+    if (qr) {
+        // Ceci va dessiner le QR code directement dans les logs Railway
+        qrcode.generate(qr, { small: true }); 
+    }
+});const express = require('express');
 const bodyParser = require('body-parser');
 const pino = require('pino');
 const fs = require('fs');
