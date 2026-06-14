@@ -6,7 +6,7 @@ const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
 
-// ===== FIX POUR "crypto is not defined" =====
+// Fix pour "crypto is not defined"
 const crypto = require('crypto');
 if (!globalThis.crypto) {
   globalThis.crypto = {
@@ -20,7 +20,6 @@ if (!globalThis.crypto) {
     },
   };
 }
-// ========================================
 
 const app = express();
 app.use(bodyParser.json());
@@ -50,15 +49,12 @@ async function connectToWhatsApp() {
       logger: pino({ level: 'error' }),
       browser: ['Gestion Stock Bot', 'Chrome', '1.0.0'],
       version: version,
-      // Configuration pour éviter les blocs WhatsApp
       patchMessageBeforeSending: (message) => {
         if (message.buttonsMessage || message.listMessage || message.templateMessage) {
           return { ...message, patchPolicy: 'patch' };
         }
         return message;
       },
-      // Désactive la vérification de certificat
-      waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -72,7 +68,6 @@ async function connectToWhatsApp() {
         console.log('📱 Ouvre ce lien dans ton navigateur pour scanner :');
         console.log(qrCodeDataURL);
         console.log('\n⚠️ Ce QR code expire dans 2 minutes !');
-        console.log('⚠️ Assure-toi que ton numéro n\'est PAS connecté à un autre appareil !');
       }
 
       if (connection === 'close') {
@@ -126,7 +121,7 @@ async function connectToWhatsApp() {
 app.all('/', (req, res) => {
   res.status(200).json({
     status: 'success',
-    message: 'Serveur Baileys en ligne. Utilise /send-order-alert pour envoyer une alerte.',
+    message: 'Serveur Baileys en ligne.',
     whatsappConnected: !!sock
   });
 });
@@ -169,10 +164,11 @@ app.all('/send-order-alert', async (req, res) => {
   }
 });
 
+// ===== CORRECTION DU PORT =====
 const PORT = process.env.PORT || 3000;
-app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
-  console.log(`🌐 Endpoint : https://whatsapp-alerts-62f6fe0e.up.railway.app/send-order-alert`);
-  console.log(`🌐 Teste aussi : https://whatsapp-alerts-62f6fe0e.up.railway.app/`);
+  console.log(`🌐 Endpoint : https://whatsapp-alerts-a8b81fff.up.railway.app/send-order-alert`);
   connectToWhatsApp();
 });
+// =============================
