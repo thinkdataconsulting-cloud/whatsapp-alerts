@@ -1,21 +1,13 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
-
-// Dans votre écouteur d'événement Baileys :
-sock.ev.on('connection.update', (update) => {
-    const { qr } = update;
-    if (qr) {
-        // Ceci va dessiner le QR code directement dans les logs Railway
-        qrcode.generate(qr, { small: true }); 
-    }
-});const express = require('express');
+const express = require('express');
 const bodyParser = require('body-parser');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
-
-// Fix pour "crypto is not defined"
 const crypto = require('crypto');
+
+// Fix pour "crypto is not defined" dans certains environnements distants
 if (!globalThis.crypto) {
   globalThis.crypto = {
     getRandomValues: (buffer) => crypto.randomBytes(buffer.length),
@@ -35,12 +27,12 @@ app.use(bodyParser.json());
 let sock;
 const pendingOrders = new Map();
 
-// Nettoie les anciennes sessions
+// Nettoie les anciennes sessions pour éviter les conflits de jetons obsolètes
 function cleanAuthFiles() {
   const authDir = path.join(__dirname, 'auth_info_baileys');
   if (fs.existsSync(authDir)) {
     fs.rmSync(authDir, { recursive: true, force: true });
-    console.log('🧹 Anciennes sessions supprimées.');
+    console.log('实用 🧹 Anciennes sessions nettoyées.');
   }
 }
 
@@ -53,7 +45,7 @@ async function connectToWhatsApp() {
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: false,
+      printQRInTerminal: false, // On gère l'affichage nous-mêmes ci-dessous
       logger: pino({ level: 'error' }),
       browser: ['Gestion Stock Bot', 'Chrome', '1.0.0'],
       version: version,
@@ -71,10 +63,10 @@ async function connectToWhatsApp() {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        const qrCodeDataURL = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
-        console.log('\n🔴🔴🔴 NOUVEAU QR CODE 🔴🔴🔴');
-        console.log('📱 Ouvre ce lien dans ton navigateur pour scanner :');
-        console.log(qrCodeDataURL);
+        console.log('\n🔴🔴🔴 NOUVEAU QR CODE (A SCANNER SUR RAILWAY) 🔴🔴🔴');
+        // Génère le QR code directement en blocs de texte scannables dans les logs de Railway
+        qrcode.generate(qr, { small: true });
+        console.log('🔗 Chaîne de texte brute Baileys (si besoin) :', qr);
       }
 
       if (connection === 'close') {
@@ -83,12 +75,12 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Déconnecté. Un nouveau QR code sera généré.');
+          console.log('⚠️ Déconnecté définitivement. Régénération d\'une session...');
           cleanAuthFiles();
           setTimeout(connectToWhatsApp, 10000);
         }
       } else if (connection === 'open') {
-        console.log('\n✅✅✅ CONNECTÉ À WHATSAPP ! ✅✅✅');
+        console.log('\n✅✅✅ CONNECTÉ À WHATSAPP AVEC SUCCÈS ! ✅✅✅');
       }
     });
 
@@ -100,16 +92,11 @@ async function connectToWhatsApp() {
           const { selectedButtonId, id: orderId } = buttonResponse;
           const order = pendingOrders.get(orderId);
           if (order) {
+            const formattedPhone = `${order.phone.replace(/\D/g, '')}@s.whatsapp.net`;
             if (selectedButtonId === 'confirm_order') {
-              await sock.sendMessage(
-                `${order.phone.replace(/\D/g, '')}@s.whatsapp.net`,
-                { text: `✅ COMMANDE CONFIRMÉE pour ${order.product}` }
-              );
+              await sock.sendMessage(formattedPhone, { text: `✅ COMMANDE CONFIRMÉE pour ${order.product}` });
             } else if (selectedButtonId === 'cancel_order') {
-              await sock.sendMessage(
-                `${order.phone.replace(/\D/g, '')}@s.whatsapp.net`,
-                { text: '❌ Commande annulée.' }
-              );
+              await sock.sendMessage(formattedPhone, { text: '❌ Commande annulée.' });
             }
             pendingOrders.delete(orderId);
           }
@@ -118,14 +105,15 @@ async function connectToWhatsApp() {
     });
 
   } catch (error) {
-    console.error('❌ Erreur dans connectToWhatsApp :', error);
+    console.error('❌ Erreur générale dans connectToWhatsApp :', error);
     cleanAuthFiles();
     setTimeout(connectToWhatsApp, 10000);
   }
 }
 
-// ===== ENDPOINTS OBLIGATOIRES =====
-// Endpoint principal pour vérifier que le serveur est en ligne
+// ===== ENDPOINTS HTTP =====
+
+// Page d'accueil pour le monitoring Railway
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
@@ -134,53 +122,52 @@ app.get('/', (req, res) => {
   });
 });
 
-// Endpoint pour envoyer une alerte
+// Endpoint POST pour la réception des alertes de n8n
 app.post('/send-order-alert', async (req, res) => {
   try {
     const { phone, product, quantity, supplier, threshold, orderId } = req.body;
+    
+    // Vérification stricte des variables reçues
     if (!phone || !product || !quantity || !supplier || !threshold || !orderId) {
-      return res.status(400).json({ status: 'error', message: 'Données manquantes.' });
+      return res.status(400).json({ status: 'error', message: 'Données manquantes dans le JSON.' });
     }
 
     if (!sock) {
-      return res.status(500).json({ status: 'error', message: 'WhatsApp non connecté.' });
+      return res.status(500).json({ status: 'error', message: 'WhatsApp n\'est pas encore prêt/connecté.' });
     }
 
     pendingOrders.set(orderId, { phone, product, quantity, supplier, threshold });
     const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
 
     await sock.sendMessage(formattedPhone, {
-      text: `🚨 ALERTE STOCK FAIBLE 🚨\n\n📦 Produit : ${product}\n📊 Quantité : ${quantity} (Seuil : ${threshold})\n🏪 Fournisseur : ${supplier}\n\nPasser une commande ?`,
+      text: `🚨 *ALERTE STOCK FAIBLE* 🚨\n\n📦 *Produit* : ${product}\n📊 *Quantité Actuelle* : ${quantity} (Seuil critique : ${threshold})\n🏪 *Fournisseur* : ${supplier}\n\nVoulez-vous valider une commande de réapprovisionnement ?`,
       buttons: [
-        { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui' }, type: 1 },
-        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non' }, type: 1 }
+        { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui, commander' }, type: 1 },
+        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non, ignorer' }, type: 1 }
       ],
-      footer: 'Répondez avec un bouton.'
+      footer: 'Gestion de Stock Automatique'
     });
 
-    return res.status(200).json({ status: 'success', message: 'Alerte envoyée.' });
+    return res.status(200).json({ status: 'success', message: 'Alerte transmise au téléphone.' });
   } catch (error) {
-    console.error('❌ Erreur :', error);
+    console.error('❌ Échec de l\'envoi du message WhatsApp :', error);
     return res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
-// Endpoint GET pour tester la connexion
+// Sécurité : évite l'erreur si n8n appelle accidentellement en GET
 app.get('/send-order-alert', (req, res) => {
   res.status(200).json({
     status: 'success',
-    message: 'Endpoint OK. Utilise POST pour envoyer une alerte.',
+    message: 'L\'endpoint fonctionne ! Utilisez la méthode POST pour envoyer des données.',
     whatsappConnected: !!sock
   });
 });
-// =================================
 
-// ===== CORRECTION DU PORT =====
-// Railway injecte automatiquement process.env.PORT
+// ===== DEMARRAGE DU SERVEUR =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Serveur démarré sur http://localhost:${PORT} (Railway: ${process.env.PORT})`);
-  console.log(`🌐 Endpoint: https://whatsapp-alerts-08d227b3.up.railway.app/send-order-alert`);
+  console.log(`🚀 Serveur démarré avec succès sur le port ${PORT}`);
+  console.log(`🌐 Endpoint cible pour n8n : https://whatsapp-alerts-08d227b3.up.railway.app/send-order-alert`);
   connectToWhatsApp();
 });
-// =============================
