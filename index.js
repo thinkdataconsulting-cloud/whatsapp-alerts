@@ -1,10 +1,11 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const express = require('express');
 const bodyParser = require('body-parser');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
+const NodeCache = require('node-cache');
 
 // Fix pour "crypto is not defined"
 const crypto = require('crypto');
@@ -38,23 +39,34 @@ function cleanAuthFiles() {
 
 async function connectToWhatsApp() {
   try {
-    cleanAuthFiles(); // Nettoie avant de démarrer
+    cleanAuthFiles();
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    const { version } = await fetchLatestBaileysVersion();
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+
+    const signalKeyStore = makeCacheableSignalKeyStore(state, pino({ level: 'silent' }));
 
     sock = makeWASocket({
-      auth: state,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state, pino({ level: 'silent' })),
+      },
       printQRInTerminal: false,
       logger: pino({ level: 'error' }),
       browser: ['Gestion Stock Bot', 'Chrome', '1.0.0'],
       version: version,
+      // Configuration pour éviter les blocs WhatsApp
       patchMessageBeforeSending: (message) => {
         if (message.buttonsMessage || message.listMessage || message.templateMessage) {
           return { ...message, patchPolicy: 'patch' };
         }
         return message;
       },
+      // Désactive la vérification de certificat
+      waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
+      // Ajout pour éviter les erreurs de connexion
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 30000,
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -68,6 +80,7 @@ async function connectToWhatsApp() {
         console.log('📱 Ouvre ce lien dans ton navigateur pour scanner :');
         console.log(qrCodeDataURL);
         console.log('\n⚠️ Ce QR code expire dans 2 minutes !');
+        console.log('⚠️ Assure-toi que ton numéro n\'est PAS connecté à un autre appareil !');
       }
 
       if (connection === 'close') {
@@ -82,6 +95,7 @@ async function connectToWhatsApp() {
         }
       } else if (connection === 'open') {
         console.log('\n✅✅✅ CONNECTÉ À WHATSAPP ! ✅✅✅');
+        console.log('📌 Ton serveur est prêt à envoyer des alertes.');
       }
     });
 
@@ -165,10 +179,11 @@ app.all('/send-order-alert', async (req, res) => {
 });
 
 // ===== CORRECTION DU PORT =====
-const PORT = process.env.PORT || 3000;
-app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
+const PORT = process.env.PORT;
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
-  console.log(`🌐 Endpoint : https://whatsapp-alerts-a8b81fff.up.railway.app/send-order-alert`);
+  console.log(`🌐 Endpoint : https://whatsapp-alerts-26f98690.up.railway.app/send-order-alert`);
+  console.log(`🌐 Teste aussi : https://whatsapp-alerts-26f98690.up.railway.app/`);
   connectToWhatsApp();
 });
 // =============================
