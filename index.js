@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -43,13 +43,8 @@ async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
 
-    const signalKeyStore = makeCacheableSignalKeyStore(state, pino({ level: 'silent' }));
-
     sock = makeWASocket({
-      auth: {
-        creds: state.creds,
-        keys: signalKeyStore,
-      },
+      auth: state,
       printQRInTerminal: false,
       logger: pino({ level: 'error' }),
       browser: ['Gestion Stock Bot', 'Chrome', '1.0.0'],
@@ -60,9 +55,6 @@ async function connectToWhatsApp() {
         }
         return message;
       },
-      waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
-      connectTimeoutMs: 60000,
-      keepAliveIntervalMs: 30000,
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -124,7 +116,9 @@ async function connectToWhatsApp() {
   }
 }
 
-app.all('/', (req, res) => {
+// ===== ENDPOINTS OBLIGATOIRES =====
+// Endpoint principal pour vérifier que le serveur est en ligne
+app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
     message: 'Serveur Baileys en ligne.',
@@ -132,16 +126,9 @@ app.all('/', (req, res) => {
   });
 });
 
-app.all('/send-order-alert', async (req, res) => {
+// Endpoint pour envoyer une alerte
+app.post('/send-order-alert', async (req, res) => {
   try {
-    if (req.method === 'GET') {
-      return res.status(200).json({
-        status: 'success',
-        message: 'Endpoint OK.',
-        whatsappConnected: !!sock
-      });
-    }
-
     const { phone, product, quantity, supplier, threshold, orderId } = req.body;
     if (!phone || !product || !quantity || !supplier || !threshold || !orderId) {
       return res.status(400).json({ status: 'error', message: 'Données manquantes.' });
@@ -170,15 +157,22 @@ app.all('/send-order-alert', async (req, res) => {
   }
 });
 
-// ===== CORRECTION DU PORT (OBLIGATOIRE) =====
-// Railway injecte automatiquement process.env.PORT
-// NE JAMAIS utiliser un port fixe comme 8080
-const PORT = process.env.PORT || 3000; // Fallback à 3000 si non défini (pour les tests locaux)
+// Endpoint GET pour tester la connexion
+app.get('/send-order-alert', (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'Endpoint OK. Utilise POST pour envoyer une alerte.',
+    whatsappConnected: !!sock
+  });
+});
+// =================================
 
-// Écoute SUR LE PORT DYNAMIQUE DE RAILWAY
+// ===== CORRECTION DU PORT =====
+// Railway injecte automatiquement process.env.PORT
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Serveur démarré sur le port ${PORT} (Railway: ${process.env.PORT})`);
-  console.log(`🌐 Endpoint: https://whatsapp-alerts-d8647781.up.railway.app/send-order-alert`);
+  console.log(`🚀 Serveur démarré sur http://localhost:${PORT} (Railway: ${process.env.PORT})`);
+  console.log(`🌐 Endpoint: https://whatsapp-alerts-08d227b3.up.railway.app/send-order-alert`);
   connectToWhatsApp();
 });
-// =============================================
+// =============================
