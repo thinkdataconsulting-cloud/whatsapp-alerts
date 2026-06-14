@@ -15,6 +15,6 @@
     "node-cache": "^5.1.2"
   },
   "engines": {
-    "node": "18.x"  // <-- Spécifie la version 18.x pour Railway
+    "node": "18.x"
   }
 }
