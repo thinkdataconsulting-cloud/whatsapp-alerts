@@ -170,7 +170,7 @@ app.all('/send-order-alert', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
   console.log(`🌐 Endpoint : https://whatsapp-alerts-62f6fe0e.up.railway.app/send-order-alert`);
   console.log(`🌐 Teste aussi : https://whatsapp-alerts-62f6fe0e.up.railway.app/`);
