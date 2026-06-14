@@ -170,9 +170,15 @@ app.all('/send-order-alert', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT;
+// ===== CORRECTION DU PORT (LIGNE OBLIGATOIRE) =====
+const PORT = process.env.PORT; // Railway injecte automatiquement cette variable
+if (!PORT) {
+  console.error('❌ ERREUR: process.env.PORT n\'est pas défini !');
+  process.exit(1);
+}
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
-  console.log(`🌐 Endpoint : https://whatsapp-alerts-26f98690.up.railway.app/send-order-alert`);
+  console.log(`🌐 Endpoint: https://whatsapp-alerts-690c8ade.up.railway.app/send-order-alert`);
   connectToWhatsApp();
 });
+// =============================================
