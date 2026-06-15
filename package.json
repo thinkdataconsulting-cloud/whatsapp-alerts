@@ -1,7 +1,6 @@
 {
   "name": "whatsapp-alerts",
   "version": "1.0.0",
-  "description": "Serveur Baileys pour envoyer des alertes WhatsApp",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -12,8 +11,5 @@
     "body-parser": "^1.20.2",
     "pino": "^8.17.2",
     "qrcode": "^1.5.3"
-  },
-  "engines": {
-    "node": "18.x"
   }
 }
