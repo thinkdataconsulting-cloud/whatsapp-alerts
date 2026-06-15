@@ -111,13 +111,16 @@ app.all('/send-order-alert', async (req, res) => {
       });
     }
 
+    // --- CORRECTION ICI ---
     const { phone, product, quantity, supplier, threshold, orderld } = req.body;
+
     if (!phone || !product || !quantity || !supplier || !threshold || !orderld) {
       return res.status(400).json({
         status: 'error',
         message: 'Données manquantes: phone, product, quantity, supplier, threshold, orderld'
       });
     }
+    // --- FIN DE CORRECTION ---
 
     if (!sock) {
       return res.status(500).json({
@@ -150,7 +153,6 @@ app.all('/send-order-alert', async (req, res) => {
     });
   }
 });
-
 // --- 4. DÉMARRAGE DU SERVEUR (TOUT À LA FIN) ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
