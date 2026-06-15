@@ -6,7 +6,7 @@ const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
 
-// Fix pour "crypto is not defined"
+// --- FIX POUR "crypto is not defined" ---
 const crypto = require('crypto');
 if (!globalThis.crypto) {
   globalThis.crypto = {
@@ -20,14 +20,15 @@ if (!globalThis.crypto) {
     },
   };
 }
+// ---
 
 const app = express();
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-// Middleware pour logger les requêtes (optionnel)
+// Middleware pour logger les requêtes
 app.use((req, res, next) => {
-  console.log(`📥 Requête reçue: ${req.method} ${req.path}`);
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
@@ -35,7 +36,7 @@ let sock;
 const pendingOrders = new Map();
 let currentQRCode = null;
 
-// Nettoie les anciennes sessions
+// --- Nettoyage des anciennes sessions ---
 function cleanAuthFiles() {
   const authDir = path.join(__dirname, 'auth_info_baileys');
   if (fs.existsSync(authDir)) {
@@ -43,7 +44,9 @@ function cleanAuthFiles() {
     console.log('🧹 Anciennes sessions supprimées.');
   }
 }
+// ---
 
+// --- Connexion à WhatsApp ---
 async function connectToWhatsApp() {
   try {
     cleanAuthFiles();
@@ -55,7 +58,7 @@ async function connectToWhatsApp() {
       auth: state,
       printQRInTerminal: false,
       logger: pino({ level: 'error' }),
-      browser: ['Gestion Stock Bot', 'Chrome', '1.0.0'],
+      browser: ['WhatsApp Alerts Bot', 'Chrome', '1.0.0'],
       version: version,
       patchMessageBeforeSending: (message) => {
         if (message.buttonsMessage || message.listMessage || message.templateMessage) {
@@ -123,13 +126,14 @@ async function connectToWhatsApp() {
     setTimeout(connectToWhatsApp, 10000);
   }
 }
+// ---
 
-// ===== ROUTES HTTP =====
-// Route racine
+// --- ENDPOINTS HTTP ---
+// Endpoint racine
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
-    message: 'Serveur Baileys en ligne.',
+    message: 'Serveur WhatsApp Alerts en ligne.',
     whatsappConnected: !!sock,
     qrCodeAvailable: !!currentQRCode,
     endpoints: {
@@ -139,7 +143,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Route pour le QR code (image PNG)
+// Endpoint pour le QR code (image PNG)
 app.get('/qrcode', (req, res) => {
   if (!currentQRCode) {
     return res.status(404).json({
@@ -158,7 +162,7 @@ app.get('/qrcode', (req, res) => {
   res.end(imgBuffer);
 });
 
-// Route pour envoyer une alerte (GET et POST)
+// Endpoint pour envoyer une alerte (GET et POST)
 app.all('/send-order-alert', async (req, res) => {
   try {
     if (req.method === 'GET') {
@@ -209,15 +213,17 @@ app.all('/send-order-alert', async (req, res) => {
     });
   }
 });
+// ---
 
-// ===== DÉMARRAGE DU SERVEUR =====
+// --- DÉMARRAGE DU SERVEUR ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
-  console.log(`🌐 URL publique: https://whatsapp-alerts-be650c90.up.railway.app`);
+  console.log(`🚀 Serveur démarré sur http://localhost:${PORT} (Railway: ${process.env.PORT})`);
+  console.log(`🌐 URL publique: https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'whatsapp-alerts.up.railway.app'}`);
   console.log(`📌 Endpoints disponibles:`);
   console.log(`   - Principal: /`);
   console.log(`   - QR Code: /qrcode`);
   console.log(`   - Alerte: /send-order-alert`);
   connectToWhatsApp();
 });
+// ---
