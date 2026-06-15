@@ -49,10 +49,12 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion en cours...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Session rejetée par WhatsApp. Nettoyage et régénération du QR Code...');
-          cleanAuthFiles();
-          setTimeout(connectToWhatsApp, 5000); // Réduit à 5s pour aller plus vite
-        }
+          const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  	console.log(`🚀 Serveur actif sur le port ${PORT}`);
+  	console.log(`🌐 Endpoint cible pour n8n : https://whatsapp-alerts-production-f810.up.railway.app/send-order-alert`);
+ 		connectToWhatsApp();
+	});
       } else if (connection === 'open') {
         currentQrCodeHtml = "";
         console.log('\n✅✅✅ CONNECTÉ À WHATSAPP AVEC SUCCÈS ! ✅✅✅');
