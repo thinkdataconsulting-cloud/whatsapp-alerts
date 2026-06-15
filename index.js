@@ -23,7 +23,13 @@ if (!globalThis.crypto) {
 
 const app = express();
 app.use(bodyParser.json());
-app.use(express.static('public')); // Pour servir les fichiers statiques
+app.use(express.static('public'));
+
+// Middleware pour logger les requêtes (optionnel)
+app.use((req, res, next) => {
+  console.log(`📥 Requête reçue: ${req.method} ${req.path}`);
+  next();
+});
 
 let sock;
 const pendingOrders = new Map();
@@ -82,7 +88,7 @@ async function connectToWhatsApp() {
         }
       } else if (connection === 'open') {
         console.log('\n✅✅✅ CONNECTÉ À WHATSAPP ! ✅✅✅');
-        currentQRCode = null; // Réinitialise le QR code après connexion
+        currentQRCode = null;
       }
     });
 
@@ -118,27 +124,30 @@ async function connectToWhatsApp() {
   }
 }
 
-// ===== ROUTES HTTP OBLIGATOIRES =====
-// Route pour l'endpoint principal
+// ===== ROUTES HTTP =====
+// Route racine
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
     message: 'Serveur Baileys en ligne.',
     whatsappConnected: !!sock,
-    qrCodeAvailable: !!currentQRCode
+    qrCodeAvailable: !!currentQRCode,
+    endpoints: {
+      qrcode: '/qrcode',
+      sendAlert: '/send-order-alert'
+    }
   });
 });
 
-// Route pour afficher le QR code
+// Route pour le QR code (image PNG)
 app.get('/qrcode', (req, res) => {
   if (!currentQRCode) {
     return res.status(404).json({
       status: 'error',
-      message: 'Aucun QR code disponible. Le serveur doit être redémarré.'
+      message: 'Aucun QR code disponible. Redémarrez le serveur.'
     });
   }
 
-  // Affiche le QR code sous forme d'image
   const base64Data = currentQRCode.replace(/^data:image\/png;base64,/, '');
   const imgBuffer = Buffer.from(base64Data, 'base64');
 
@@ -149,7 +158,7 @@ app.get('/qrcode', (req, res) => {
   res.end(imgBuffer);
 });
 
-// Route pour l'endpoint d'alerte
+// Route pour envoyer une alerte (GET et POST)
 app.all('/send-order-alert', async (req, res) => {
   try {
     if (req.method === 'GET') {
@@ -162,11 +171,17 @@ app.all('/send-order-alert', async (req, res) => {
 
     const { phone, product, quantity, supplier, threshold, orderId } = req.body;
     if (!phone || !product || !quantity || !supplier || !threshold || !orderId) {
-      return res.status(400).json({ status: 'error', message: 'Données manquantes.' });
+      return res.status(400).json({
+        status: 'error',
+        message: 'Données manquantes: phone, product, quantity, supplier, threshold, orderId'
+      });
     }
 
     if (!sock) {
-      return res.status(500).json({ status: 'error', message: 'WhatsApp non connecté.' });
+      return res.status(500).json({
+        status: 'error',
+        message: 'WhatsApp non connecté. Scannez d\'abord le QR code.'
+      });
     }
 
     pendingOrders.set(orderId, { phone, product, quantity, supplier, threshold });
@@ -181,21 +196,28 @@ app.all('/send-order-alert', async (req, res) => {
       footer: 'Répondez avec un bouton.'
     });
 
-    return res.status(200).json({ status: 'success', message: 'Alerte envoyée.' });
+    return res.status(200).json({
+      status: 'success',
+      message: 'Alerte envoyée avec succès.',
+      orderId: orderId
+    });
   } catch (error) {
     console.error('❌ Erreur :', error);
-    return res.status(500).json({ status: 'error', message: error.message });
+    return res.status(500).json({
+      status: 'error',
+      message: error.message || 'Erreur interne du serveur'
+    });
   }
 });
-// =================================
 
-// ===== CORRECTION DU PORT =====
+// ===== DÉMARRAGE DU SERVEUR =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Serveur démarré sur http://localhost:${PORT} (Railway: ${process.env.PORT})`);
-  console.log(`🌐 Endpoint principal: https://whatsapp-alerts-production-f810.up.railway.app/`);
-  console.log(`🌐 Endpoint QR Code: https://whatsapp-alerts-production-f810.up.railway.app/qrcode`);
-  console.log(`🌐 Endpoint alerte: https://whatsapp-alerts-production-f810.up.railway.app/send-order-alert`);
+  console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
+  console.log(`🌐 URL publique: https://whatsapp-alerts-be650c90.up.railway.app`);
+  console.log(`📌 Endpoints disponibles:`);
+  console.log(`   - Principal: /`);
+  console.log(`   - QR Code: /qrcode`);
+  console.log(`   - Alerte: /send-order-alert`);
   connectToWhatsApp();
 });
-// =============================
