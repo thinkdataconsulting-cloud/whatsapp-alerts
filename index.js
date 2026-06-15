@@ -102,23 +102,32 @@ app.get('/qrcode', (req, res) => {
 });
 
 app.all('/send-order-alert', async (req, res) => {
-  try {
-    const { phone, product, quantity, supplier, threshold, orderId, orderld } = req.body;
+  // --- AJOUTE CECI POUR DÉBOGUER ---
+  console.log('🔍 Requête reçue:', JSON.stringify(req.body, null, 2));
+  console.log('🔍 Headers:', req.headers);
+  // --- FIN DU DÉBOGAGE ---
 
-    // Accepte orderId OU orderld
-    const orderIdentifier = orderId || orderld;
-    if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderIdentifier) {
+  try {
+    if (req.method === 'GET') {
+      return res.status(200).json({
+        status: 'success',
+        message: 'Endpoint OK. Utilise POST pour envoyer une alerte.',
+        whatsappConnected: !!sock
+      });
+    }
+
+    const { phone, product, quantity, supplier, threshold, orderld } = req.body;
+    console.log('🔍 Champs extraits:', { phone, product, quantity, supplier, threshold, orderld });
+
+    if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderld) {
       return res.status(400).json({
         status: 'error',
-        message: `Données manquantes: ${Object.entries({ phone, product, quantity, supplier, threshold, orderIdentifier })
+        message: `Données manquantes: ${Object.entries({ phone, product, quantity, supplier, threshold, orderld })
           .filter(([_, value]) => !value && value !== 0)
           .map(([key]) => key)
           .join(', ')}`
       });
     }
-
-    // Utilise orderIdentifier dans la suite du code
-    pendingOrders.set(orderIdentifier, { phone, product, quantity, supplier, threshold });
     // ... reste du code ...
   } catch (error) {
     console.error('❌ Erreur:', error);
