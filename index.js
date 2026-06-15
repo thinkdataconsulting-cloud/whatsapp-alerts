@@ -102,6 +102,11 @@ app.get('/qrcode', (req, res) => {
 });
 
 app.all('/send-order-alert', async (req, res) => {
+  // --- AJOUTE CECI POUR DÉBOGUER ---
+  console.log('🔍 Requête reçue:', JSON.stringify(req.body, null, 2));
+  console.log('🔍 Headers:', req.headers);
+  // --- FIN DU DÉBOGAGE ---
+
   try {
     if (req.method === 'GET') {
       return res.status(200).json({
@@ -111,46 +116,22 @@ app.all('/send-order-alert', async (req, res) => {
       });
     }
 
-    // --- CORRECTION ICI ---
     const { phone, product, quantity, supplier, threshold, orderld } = req.body;
+    console.log('🔍 Champs extraits:', { phone, product, quantity, supplier, threshold, orderld });
 
-    if (!phone || !product || !quantity || !supplier || !threshold || !orderld) {
+    if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderld) {
       return res.status(400).json({
         status: 'error',
-        message: 'Données manquantes: phone, product, quantity, supplier, threshold, orderld'
+        message: `Données manquantes: ${Object.entries({ phone, product, quantity, supplier, threshold, orderld })
+          .filter(([_, value]) => !value && value !== 0)
+          .map(([key]) => key)
+          .join(', ')}`
       });
     }
-    // --- FIN DE CORRECTION ---
-
-    if (!sock) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'WhatsApp non connecté. Scannez d\'abord le QR code.'
-      });
-    }
-
-    pendingOrders.set(orderld, { phone, product, quantity, supplier, threshold });
-    const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
-
-    await sock.sendMessage(formattedPhone, {
-      text: `🚨 ALERTE STOCK FAIBLE 🚨\n\n📦 Produit : ${product}\n📊 Quantité : ${quantity} (Seuil : ${threshold})\n🏪 Fournisseur : ${supplier}\n\nPasser une commande ?`,
-      buttons: [
-        { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui' }, type: 1 },
-        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non' }, type: 1 }
-      ],
-    });
-
-    return res.status(200).json({
-      status: 'success',
-      message: 'Alerte envoyée avec succès.',
-      orderId: orderld
-    });
+    // ... reste du code ...
   } catch (error) {
-    console.error('❌ Erreur dans /send-order-alert :', error);
-    return res.status(500).json({
-      status: 'error',
-      message: error.message || 'Erreur interne du serveur'
-    });
+    console.error('❌ Erreur:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 // --- 4. DÉMARRAGE DU SERVEUR (TOUT À LA FIN) ---
