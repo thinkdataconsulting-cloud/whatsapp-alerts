@@ -102,12 +102,13 @@ app.get('/qrcode', (req, res) => {
 });
 
 app.all('/send-order-alert', async (req, res) => {
-  // --- AJOUTE CECI POUR DÉBOGUER ---
-  console.log('🔍 Requête reçue:', JSON.stringify(req.body, null, 2));
-  console.log('🔍 Headers:', req.headers);
-  // --- FIN DU DÉBOGAGE ---
-
   try {
+    // --- DÉBOGAGE AVANCÉ ---
+    console.log('🔍 HEADERS:', req.headers);
+    console.log('🔍 BODY (raw):', req.body);
+    console.log('🔍 BODY (string):', JSON.stringify(req.body));
+    // --- FIN DÉBOGAGE ---
+
     if (req.method === 'GET') {
       return res.status(200).json({
         status: 'success',
@@ -116,7 +117,17 @@ app.all('/send-order-alert', async (req, res) => {
       });
     }
 
+    // Vérifie que req.body n'est pas vide
+    if (!req.body || Object.keys(req.body).length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Body vide ! Vérifie que tu envoies bien un JSON avec Content-Type: application/json'
+      });
+    }
+
     const { phone, product, quantity, supplier, threshold, orderld } = req.body;
+
+    // Affiche les valeurs extraites
     console.log('🔍 Champs extraits:', { phone, product, quantity, supplier, threshold, orderld });
 
     if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderld) {
@@ -128,10 +139,14 @@ app.all('/send-order-alert', async (req, res) => {
           .join(', ')}`
       });
     }
+
     // ... reste du code ...
   } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
+    console.error('❌ Erreur dans /send-order-alert :', error);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message || 'Erreur interne du serveur'
+    });
   }
 });
 // --- 4. DÉMARRAGE DU SERVEUR (TOUT À LA FIN) ---
