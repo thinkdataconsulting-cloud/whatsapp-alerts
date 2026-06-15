@@ -1,6 +1,28 @@
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const express = require('express');
+const bodyParser = require('body-parser');
+const pino = require('pino');
+const fs = require('fs');
+const path = require('path');
+const qrcodeImg = require('qrcode');
+
+const app = express();
+app.use(bodyParser.json());
+
+let sock;
+let currentQrCodeHtml = ""; 
+const pendingOrders = new Map();
+
+function cleanAuthFiles() {
+  const authDir = path.join(__dirname, 'auth_info_baileys');
+  if (fs.existsSync(authDir)) {
+    fs.rmSync(authDir, { recursive: true, force: true });
+    console.log('🧹 Session obsolète nettoyée.');
+  }
+}
+
 async function connectToWhatsApp() {
   try {
-    // FORCE LE NETTOYAGE : Supprime les résidus de déconnexion avant de charger la session
     cleanAuthFiles();
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -49,12 +71,10 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion en cours...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  	console.log(`🚀 Serveur actif sur le port ${PORT}`);
-  	console.log(`🌐 Endpoint cible pour n8n : https://whatsapp-alerts-production-f810.up.railway.app/send-order-alert`);
- 		connectToWhatsApp();
-	});
+          console.log('⚠️ Session rejetée ou déconnectée. Nettoyage...');
+          cleanAuthFiles();
+          setTimeout(connectToWhatsApp, 10000);
+        }
       } else if (connection === 'open') {
         currentQrCodeHtml = "";
         console.log('\n✅✅✅ CONNECTÉ À WHATSAPP AVEC SUCCÈS ! ✅✅✅');
@@ -66,3 +86,56 @@ app.listen(PORT, '0.0.0.0', () => {
     setTimeout(connectToWhatsApp, 10000);
   }
 }
+
+// ===== ENDPOINTS HTTP =====
+app.get('/qrcode', (req, res) => {
+  if (currentQrCodeHtml) {
+    res.send(currentQrCodeHtml);
+  } else {
+    res.send(`
+      <html>
+        <body style="background: #111b21; color: white; text-align: center; font-family: sans-serif; padding-top: 50px;">
+          <h2>✅ WhatsApp est connecté ou en cours d\'initialisation...</h2>
+          <p style="color: #a9b1b6;">Si le bot ne répond pas, rafraîchissez dans quelques instants.</p>
+        </body>
+      </html>
+    `);
+  }
+});
+
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'success', whatsappConnected: !!sock });
+});
+
+app.post('/send-order-alert', async (req, res) => {
+  try {
+    const { phone, product, quantity, supplier, threshold, orderId } = req.body;
+    
+    if (!phone || !product || !quantity || !supplier || !threshold || !orderId) {
+      return res.status(400).json({ status: 'error', message: 'Données JSON incomplètes.' });
+    }
+
+    if (!sock || currentQrCodeHtml !== "") {
+      return res.status(500).json({ status: 'error', message: 'WhatsApp non connecté. Veuillez scanner le QR code.' });
+    }
+
+    pendingOrders.set(orderId, { phone, product, quantity, supplier, threshold });
+    const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
+
+    await sock.sendMessage(formattedPhone, {
+      text: `🚨 *ALERTE STOCK FAIBLE* 🚨\n\n📦 *Produit* : ${product}\n📊 *Quantité Actuelle* : ${quantity} (Seuil : ${threshold})\n🏪 *Fournisseur* : ${supplier}\n\nVoulez-vous commander ?`
+    });
+
+    return res.status(200).json({ status: 'success', message: 'Alerte transmise.' });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// ===== DÉMARRAGE DU SERVEUR (ÉCRIT CORRECTEMENT ICI) =====
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Serveur actif sur le port ${PORT}`);
+  console.log(`🌐 Endpoint cible pour n8n : https://whatsapp-alerts-production-f810.up.railway.app/send-order-alert`);
+  connectToWhatsApp();
+});
