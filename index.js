@@ -129,7 +129,6 @@ async function connectToWhatsApp() {
 // ---
 
 // --- ENDPOINTS HTTP ---
-// Endpoint racine
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
@@ -143,7 +142,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Endpoint pour le QR code (image PNG)
 app.get('/qrcode', (req, res) => {
   if (!currentQRCode) {
     return res.status(404).json({
@@ -162,7 +160,6 @@ app.get('/qrcode', (req, res) => {
   res.end(imgBuffer);
 });
 
-// Endpoint pour envoyer une alerte (GET et POST)
 app.all('/send-order-alert', async (req, res) => {
   try {
     if (req.method === 'GET') {
@@ -192,38 +189,3 @@ app.all('/send-order-alert', async (req, res) => {
     const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
 
     await sock.sendMessage(formattedPhone, {
-      text: `🚨 ALERTE STOCK FAIBLE 🚨\n\n📦 Produit : ${product}\n📊 Quantité : ${quantity} (Seuil : ${threshold})\n🏪 Fournisseur : ${supplier}\n\nPasser une commande ?`,
-      buttons: [
-        { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui' }, type: 1 },
-        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non' }, type: 1 }
-      ],
-      footer: 'Répondez avec un bouton.'
-    });
-
-    return res.status(200).json({
-      status: 'success',
-      message: 'Alerte envoyée avec succès.',
-      orderId: orderId
-    });
-  } catch (error) {
-    console.error('❌ Erreur :', error);
-    return res.status(500).json({
-      status: 'error',
-      message: error.message || 'Erreur interne du serveur'
-    });
-  }
-});
-// ---
-
-// --- DÉMARRAGE DU SERVEUR ---
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Serveur démarré sur http://localhost:${PORT} (Railway: ${process.env.PORT})`);
-  console.log(`🌐 URL publique: https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'whatsapp-alerts.up.railway.app'}`);
-  console.log(`📌 Endpoints disponibles:`);
-  console.log(`   - Principal: /`);
-  console.log(`   - QR Code: /qrcode`);
-  console.log(`   - Alerte: /send-order-alert`);
-  connectToWhatsApp();
-});
-// ---
