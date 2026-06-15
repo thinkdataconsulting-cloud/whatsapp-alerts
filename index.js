@@ -13,19 +13,28 @@ let sock;
 let currentQrCodeHtml = ""; 
 const pendingOrders = new Map();
 
+// CORRECTION CLOUD : On utilise le dossier /tmp qui est le seul autorisé en écriture sur Railway
+const AUTH_DIR = path.join('/tmp', 'auth_info_baileys');
+
 function cleanAuthFiles() {
-  const authDir = path.join(__dirname, 'auth_info_baileys');
-  if (fs.existsSync(authDir)) {
-    fs.rmSync(authDir, { recursive: true, force: true });
-    console.log('🧹 Session obsolète nettoyée.');
+  if (fs.existsSync(AUTH_DIR)) {
+    try {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      console.log('🧹 Session temporaire /tmp nettoyée.');
+    } catch (e) {
+      console.log('⚠️ Impossible de nettoyer /tmp :', e.message);
+    }
   }
 }
 
 async function connectToWhatsApp() {
   try {
-    cleanAuthFiles();
+    // S'assure que le dossier /tmp existe bien avant de lancer Baileys
+    if (!fs.existsSync(AUTH_DIR)) {
+      fs.mkdirSync(AUTH_DIR, { recursive: true });
+    }
 
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
@@ -71,7 +80,7 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion en cours...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Session rejetée ou déconnectée. Nettoyage...');
+          console.log('⚠️ Session rejetée. Réinitialisation complète...');
           cleanAuthFiles();
           setTimeout(connectToWhatsApp, 10000);
         }
@@ -95,8 +104,8 @@ app.get('/qrcode', (req, res) => {
     res.send(`
       <html>
         <body style="background: #111b21; color: white; text-align: center; font-family: sans-serif; padding-top: 50px;">
-          <h2>✅ WhatsApp est connecté ou en cours d\'initialisation...</h2>
-          <p style="color: #a9b1b6;">Si le bot ne répond pas, rafraîchissez dans quelques instants.</p>
+          <h2>✅ WhatsApp est connecté ou en cours d'initialisation...</h2>
+          <p style="color: #a9b1b6;">Si le bot ne fonctionne pas encore, rafraîchissez cette page dans 10 secondes.</p>
         </body>
       </html>
     `);
@@ -132,7 +141,6 @@ app.post('/send-order-alert', async (req, res) => {
   }
 });
 
-// ===== DÉMARRAGE DU SERVEUR (ÉCRIT CORRECTEMENT ICI) =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur actif sur le port ${PORT}`);
