@@ -1,19 +1,3 @@
-// ====== POLYFILL CRITICAL CRYPTO (DOIT ÊTRE EN TOUT DÉBUT DE FICHIER) ======
-const crypto = require('crypto');
-if (!global.crypto) {
-  global.crypto = crypto.webcrypto || {
-    getRandomValues: (buffer) => crypto.randomBytes(buffer.length),
-    subtle: crypto.webcrypto?.subtle || {
-      digest: async (algorithm, data) => {
-        const hash = crypto.createHash(algorithm.toLowerCase().replace('-', ''));
-        hash.update(data);
-        return new Uint8Array(hash.digest());
-      },
-    },
-  };
-}
-// ===========================================================================
-
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -33,7 +17,7 @@ function cleanAuthFiles() {
   const authDir = path.join(__dirname, 'auth_info_baileys');
   if (fs.existsSync(authDir)) {
     fs.rmSync(authDir, { recursive: true, force: true });
-    console.log(' Ancien jeton de session expiré nettoyé.');
+    console.log('🧹 Session obsolète nettoyée.');
   }
 }
 
@@ -65,7 +49,7 @@ async function connectToWhatsApp() {
                   <div style="background: white; display: inline-block; padding: 20px; border-radius: 10px; margin-top: 20px;">
                     <img src="${url}" style="width: 300px; height: 300px; image-rendering: pixelated;"/>
                   </div>
-                  <p style="margin-top: 20px; color: #a9b1b6;">Lien actif. Recharge automatique intégrée.</p>
+                  <p style="margin-top: 20px; color: #a9b1b6;">Le code se rafraîchit automatiquement toutes les 20 secondes.</p>
                   <script>setInterval(() => { location.reload(); }, 20000);</script>
                 </body>
               </html>
@@ -94,7 +78,7 @@ async function connectToWhatsApp() {
     });
 
   } catch (error) {
-    console.error(' Erreur connexion Baileys :', error);
+    console.error('❌ Erreur de connexion :', error);
     setTimeout(connectToWhatsApp, 10000);
   }
 }
@@ -108,7 +92,7 @@ app.get('/qrcode', (req, res) => {
       <html>
         <body style="background: #111b21; color: white; text-align: center; font-family: sans-serif; padding-top: 50px;">
           <h2>✅ WhatsApp est connecté ou en cours d'initialisation...</h2>
-          <p style="color: #a9b1b6;">Veuillez patienter ou vérifier vos logs Railway.</p>
+          <p style="color: #a9b1b6;">Si l'appareil n'est pas connecté, rafraîchissez dans quelques instants.</p>
         </body>
       </html>
     `);
@@ -128,7 +112,7 @@ app.post('/send-order-alert', async (req, res) => {
     }
 
     if (!sock || currentQrCodeHtml !== "") {
-      return res.status(500).json({ status: 'error', message: 'WhatsApp n\'est pas connecté. Scannez d\'abord le QR code.' });
+      return res.status(500).json({ status: 'error', message: 'WhatsApp non connecté. Veuillez scanner le QR code.' });
     }
 
     pendingOrders.set(orderId, { phone, product, quantity, supplier, threshold });
