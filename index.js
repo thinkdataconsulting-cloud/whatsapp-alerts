@@ -154,7 +154,7 @@ app.all('/send-order-alert', async (req, res) => {
   }
 });
 // --- 4. DÉMARRAGE DU SERVEUR (TOUT À LA FIN) ---
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;  // <-- Utilise le port 8080
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
   connectToWhatsApp();
