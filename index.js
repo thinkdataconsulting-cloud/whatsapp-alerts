@@ -1,4 +1,4 @@
-// --- 1. DÉPENDANCES ET INITIALISATIONS ---
+// ====== 1. DÉPENDANCES ET INITIALISATIONS ======
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const express = require('express');
@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// Fix pour "crypto is not defined"
+// Fix pour "crypto is not defined" dans les conteneurs distants
 if (!globalThis.crypto) {
   globalThis.crypto = {
     getRandomValues: (buffer) => crypto.randomBytes(buffer.length),
@@ -21,7 +21,6 @@ if (!globalThis.crypto) {
   };
 }
 
-// Initialise Express
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -33,24 +32,33 @@ const pendingOrders = new Map();
 let currentQRCode = null;
 const ADMIN_PHONE = process.env.ADMIN_PHONE_NUMBER || "+22791848270";
 
-// --- 2. FONCTIONS UTILITAIRES ---
+// CORRECTION CLOUD : Écriture impérative dans /tmp pour contourner le mode Read-Only de Railway
+const AUTH_DIR = path.join('/tmp', 'auth_info_baileys');
+
+// ====== 2. FONCTIONS UTILITAIRES ======
 function cleanAuthFiles() {
-  const authDir = path.join(__dirname, 'auth_info_baileys');
-  if (fs.existsSync(authDir)) {
-    fs.rmSync(authDir, { recursive: true, force: true });
-    console.log('🧹 Anciennes sessions supprimées.');
+  if (fs.existsSync(AUTH_DIR)) {
+    try {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      console.log('🧹 Session temporaire déconnectée nettoyée.');
+    } catch (e) {
+      console.log('⚠️ Impossible de nettoyer /tmp :', e.message);
+    }
   }
 }
 
 async function connectToWhatsApp() {
   try {
-    cleanAuthFiles();
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    if (!fs.existsSync(AUTH_DIR)) {
+      fs.mkdirSync(AUTH_DIR, { recursive: true });
+    }
+
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: true,  // Affiche le QR dans les logs
+      printQRInTerminal: true,  
       logger: pino({ level: 'error' }),
       browser: ['WhatsApp Alerts Bot', 'Chrome', '1.0.0'],
       version: version,
@@ -58,48 +66,38 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
+    // Gestion de l'état de la connexion
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        // Génère le QR code UNE SEULE FOIS
         if (!currentQRCode) {
-          currentQRCode = qr; // Stocke l'objet QR, pas l'URL
+          currentQRCode = qr; 
           console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
-          console.log('🌐 URL : https://whatsapp-alerts-production-af15.up.railway.app/qrcode');
+          console.log('🌐 URL DE SCAN : https://whatsapp-alerts-production-af15.up.railway.app/qrcode');
         }
       }
 
       if (connection === 'open') {
-        console.log('\n✅ CONNECTÉ À WHATSAPP ! ✅');
-        currentQRCode = null; // Réinitialise le QR code
+        console.log('\n✅ CONNECTÉ À WHATSAPP AVEC SUCCÈS ! ✅');
+        currentQRCode = null; 
       }
 
       if (connection === 'close') {
+        currentQRCode = null; 
         const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
         if (shouldReconnect) {
           console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Déconnecté. Scannez un nouveau QR code.');
+          console.log('⚠️ Session rejetée. Réinitialisation complète...');
           cleanAuthFiles();
-          currentQRCode = null; // Réinitialise avant de reconnecter
           setTimeout(connectToWhatsApp, 10000);
         }
       }
     });
 
-    sock.ev.on('messages.upsert', async (m) => {
-      // ... (garde ton code existant)
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur WhatsApp:', error);
-    setTimeout(connectToWhatsApp, 10000);
-  }
-}
-    sock.ev.on('creds.update', saveCreds);
-
+    // Gestion des réponses aux boutons (Reçu une seule fois)
     sock.ev.on('messages.upsert', async (m) => {
       const message = m.messages[0];
       if (!message.key.fromMe && message.pushName) {
@@ -120,7 +118,7 @@ async function connectToWhatsApp() {
                 });
               }
             } catch (error) {
-              console.error('❌ Erreur confirmation:', error);
+              console.error('❌ Erreur lors de la réponse au bouton :', error);
             }
             pendingOrders.delete(orderId);
           }
@@ -134,22 +132,18 @@ async function connectToWhatsApp() {
   }
 }
 
-// --- 3. MIDDLEWARE ---
+// ====== 3. MIDDLEWARE TIMEOUT ======
 app.use((req, res, next) => {
   req.setTimeout(30000, () => {
-    if (!res.headersSent) {
-      res.status(408).json({ error: 'Request Timeout' });
-    }
+    if (!res.headersSent) res.status(408).json({ error: 'Request Timeout' });
   });
   res.setTimeout(30000, () => {
-    if (!res.headersSent) {
-      res.status(504).json({ error: 'Response Timeout' });
-    }
+    if (!res.headersSent) res.status(504).json({ error: 'Response Timeout' });
   });
   next();
 });
 
-// --- 4. ENDPOINTS ---
+// ====== 4. ENDPOINTS HTTP ======
 app.get('/', (req, res) => {
   res.json({
     status: 'success',
@@ -159,39 +153,43 @@ app.get('/', (req, res) => {
   });
 });
 
+// Endpoint d'affichage du QR Code sous forme d'image PNG claire
 app.get('/qrcode', async (req, res) => {
   if (!currentQRCode) {
     return res.status(404).json({
       status: 'error',
-      message: 'Aucun QR code disponible. Attendez qu\'un nouveau soit généré.'
+      message: 'Aucun QR code disponible. S\'il est déjà connecté, visitez la racine /'
     });
   }
 
   try {
-    // Génère l'image QR à partir de l'objet
     const qrBuffer = await qrcode.toBuffer(currentQRCode, { width: 400, margin: 2 });
     res.writeHead(200, { 'Content-Type': 'image/png' });
     res.end(qrBuffer);
   } catch (error) {
-    console.error('❌ Erreur QR code:', error);
-    res.status(500).json({ error: 'Erreur lors de la génération du QR code' });
+    console.error('❌ Erreur génération image QR code:', error);
+    res.status(500).json({ error: 'Erreur de traitement de l\'image QR.' });
   }
 });
+
+// CORRECTION 'orderld' -> 'orderId' : Réception des flux n8n
 app.post('/send-order-alert', async (req, res) => {
   try {
     if (!sock || sock.ws?.readyState !== 1) {
       return res.status(503).json({
-        error: 'WhatsApp non connecté. Scannez le QR code à /qrcode',
+        error: 'WhatsApp non connecté. Veuillez flasher le code sur /qrcode',
         sockStatus: sock?.ws?.readyState
       });
     }
 
-    const { phone, product, quantity, supplier, threshold, orderld } = req.body;
+    // Extraction des paramètres du JSON (Correction de l'ID)
+    const { phone, product, quantity, supplier, threshold, orderId } = req.body;
+    
     const finalPhone = phone || ADMIN_PHONE;
     const formattedPhone = finalPhone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-    const orderIdentifier = orderld || `ORDER-${product}-${Date.now()}`;
+    const orderIdentifier = orderId || `ORDER-${product}-${Date.now()}`;
 
-    // Stocke la commande
+    // Sauvegarde en mémoire vive pour gérer les interactions de l'utilisateur
     pendingOrders.set(orderIdentifier, {
       phone: formattedPhone,
       product,
@@ -200,13 +198,14 @@ app.post('/send-order-alert', async (req, res) => {
       threshold
     });
 
-    // Envoie le message
+    // Envoi de l'alerte interactive avec boutons vers l'appareil cible
     await sock.sendMessage(formattedPhone, {
-      text: `🚨 ALERTE STOCK FAIBLE 🚨\n\n📦 Produit: ${product}\n📊 Quantité: ${quantity}\n⚠️ Seuil: ${threshold}\n🏪 Fournisseur: ${supplier}`,
+      text: `🚨 *ALERTE STOCK FAIBLE* 🚨\n\n📦 *Produit*: ${product}\n📊 *Quantité Actuelle*: ${quantity}\n⚠️ *Seuil Alerte*: ${threshold}\n🏪 *Fournisseur*: ${supplier}\n\nVoulez-vous déclencher la commande ?`,
       buttons: [
-        { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui' }, type: 1 },
-        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non' }, type: 1 }
-      ]
+        { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui, commander' }, type: 1 },
+        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non, ignorer' }, type: 1 }
+      ],
+      footer: 'Système d\'automatisation de stock'
     });
 
     return res.json({
@@ -217,7 +216,7 @@ app.post('/send-order-alert', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur:', error);
+    console.error('❌ Erreur envoi message HTTP :', error);
     return res.status(500).json({
       error: error.message,
       stack: error.stack
@@ -225,16 +224,16 @@ app.post('/send-order-alert', async (req, res) => {
   }
 });
 
-// --- 5. DÉMARRAGE ---
+// ====== 5. DÉMARRAGE DU PROCESSEUR ======
 const PORT = process.env.PORT || 8080;
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-  console.log(`🌐 URL: https://whatsapp-alerts-production-af15.up.railway.app`);
+  console.log(`🌐 URL cible n8n : https://whatsapp-alerts-production-af15.up.railway.app/send-order-alert`);
   connectToWhatsApp();
 });
 
 server.on('error', (error) => {
-  console.error('❌ Erreur serveur:', error);
+  console.error('❌ Erreur fatale serveur:', error);
   if (error.code === 'EADDRINUSE') {
     setTimeout(() => server.listen(3000, '0.0.0.0', connectToWhatsApp), 1000);
   }
