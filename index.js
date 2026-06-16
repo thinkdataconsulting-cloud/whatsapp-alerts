@@ -30,7 +30,7 @@ let sock;
 const pendingOrders = new Map();
 let currentQRCode = null;
 
-// SÉCURITÉ CLOUD : Utilisation stricte du répertoire /tmp autorisé en écriture sur Railway
+// SÉCURITÉ CLOUD : Répertoire d'écriture autorisé sur Railway
 const AUTH_DIR = path.join('/tmp', 'auth_info_baileys');
 
 // ====== 2. FONCTIONS UTILITAIRES ======
@@ -38,9 +38,9 @@ function cleanAuthFiles() {
   if (fs.existsSync(AUTH_DIR)) {
     try {
       fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      console.log('Base de session réinitialisée.');
+      console.log('🧹 Base de session réinitialisée.');
     } catch (e) {
-      console.log('Erreur nettoyage temporaire :', e.message);
+      console.log('⚠️ Erreur nettoyage temporaire :', e.message);
     }
   }
 }
@@ -69,7 +69,7 @@ async function connectToWhatsApp() {
 
       if (qr) {
         currentQRCode = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
-        console.log('\n🔴🔴🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴🔴🔴');
+        console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
         console.log('📱 QR Code disponible à l\'adresse : /qrcode');
       }
 
@@ -80,34 +80,34 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Session déconnectée. Nettoyage complet...');
+          console.log('⚠️ Session déconnectée. Réinitialisation...');
           cleanAuthFiles();
           setTimeout(connectToWhatsApp, 10000);
         }
       } else if (connection === 'open') {
-        console.log('\n✅✅✅ CONNECTÉ À WHATSAPP AVEC SUCCÈS ! ✅✅✅');
+        console.log('\n✅ CONNECTÉ À WHATSAPP AVEC SUCCÈS ! ✅');
         currentQRCode = null;
       }
     });
 
-    // ÉCOUTEUR INTERACTIF SÉCURISÉ CONTRE LES MESSAGES VIDES
+    // ÉCOUTEUR INTERACTIF COMPLÈTEMENT SÉCURISÉ CONTRE LES MESSAGES VIDES
     sock.ev.on('messages.upsert', async (m) => {
       try {
         const message = m.messages[0];
-        // Sécurité : on s'assure que le message existe, ne vient pas de nous et contient un corps de message
+        // Sécurité stricte : évite le crash si la structure du message est absente ou vide
         if (!message || message.key.fromMe || !message.message) return;
 
         const from = message.key.remoteJid;
         
-        // Extraction sécurisée du texte (évite le crash "Cannot read properties of undefined")
+        // Extraction sécurisée des différentes sources possibles de texte
         const textResponse = message.message.conversation || 
                              message.message.extendedTextMessage?.text || 
                              "";
 
         const cleanText = textResponse.trim().toLowerCase();
-        if (!cleanText) return; // Si aucun texte n'est extrait, on ignore
+        if (!cleanText) return; // Si le message reçu n'a pas de texte, on n'exécute rien
 
-        // Recherche d'une commande en attente liée à cet expéditeur
+        // Recherche de la commande en attente liée à ce numéro JID
         let foundOrderId = null;
         let foundOrder = null;
 
@@ -137,12 +137,12 @@ async function connectToWhatsApp() {
           }
         }
       } catch (upsertError) {
-        console.error('⚠️ Erreur lors du traitement du message reçu :', upsertError.message);
+        console.error('⚠️ Message ignoré ou impossible à traiter :', upsertError.message);
       }
     });
 
   } catch (error) {
-    console.error('❌ Erreur dans connectToWhatsApp :', error);
+    console.error('❌ Erreur globale WhatsApp :', error);
     setTimeout(connectToWhatsApp, 10000);
   }
 }
@@ -191,11 +191,16 @@ app.all('/send-order-alert', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Body de requête JSON vide.' });
     }
 
-    const { phone, product, quantity, supplier, threshold, orderld, orderId } = req.body;
-    const orderIdentifier = orderld || orderId;
+    // Extraction multi-casse pour accepter n'importe quel format d'identifiant envoyé par n8n
+    const { phone, product, quantity, supplier, threshold, orderld, orderId, orderID } = req.body;
+    const orderIdentifier = orderld || orderId || orderID;
 
     if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderIdentifier) {
-      return res.status(400).json({ status: 'error', message: 'Données JSON incomplètes pour l\'envoi.' });
+      return res.status(400).json({ 
+        status: 'error', 
+        message: `Données manquantes.`,
+        details: { phone: !!phone, product: !!product, quantity: quantity !== undefined, supplier: !!supplier, threshold: threshold !== undefined, orderIdentifier: !!orderIdentifier }
+      });
     }
 
     if (!sock || sock.ws?.readyState !== 1) {
@@ -204,8 +209,8 @@ app.all('/send-order-alert', async (req, res) => {
 
     const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
 
-    // CORRECTION ICI : Utilisation de phoneJid pour correspondre parfaitement avec l'écouteur
-    pendingOrders.set(orderIdentifier, {
+    // Stockage en mémoire vive de la session d'alerte
+    pendingOrders.set(String(orderIdentifier), {
       phoneJid: formattedPhone,
       product,
       quantity,
@@ -213,7 +218,6 @@ app.all('/send-order-alert', async (req, res) => {
       threshold
     });
 
-    // Format textuel interactif ultra-stable
     const alertMessage = `🚨 *ALERTE STOCK FAIBLE* 🚨\n\n` +
                          `📦 *Produit* : ${product}\n` +
                          `📊 *Quantité Actuelle* : ${quantity}\n` +
@@ -232,14 +236,14 @@ app.all('/send-order-alert', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur d\'envoi :', error);
+    console.error('❌ Erreur d\'envoi HTTP :', error);
     return res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
 // ====== 5. DÉMARRAGE ======
 const PORT = process.env.PORT || 8080;
-const server = app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur actif sur le port ${PORT}`);
   connectToWhatsApp();
 });
