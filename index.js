@@ -2,7 +2,6 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const express = require('express');
-const bodyParser = require('body-parser');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
@@ -22,9 +21,10 @@ if (!globalThis.crypto) {
   };
 }
 
-// Initialise Express
+// Initialise Express avec les middlewares corrects
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json({ limit: '10mb' })); // Remplace bodyParser.json()
+app.use(express.urlencoded({ extended: true })); // Pour les requêtes URL-encoded
 app.use(express.static('public'));
 
 // Variables globales
@@ -60,64 +60,133 @@ async function connectToWhatsApp() {
       const { connection, lastDisconnect, qr } = update;
       if (qr) {
         currentQRCode = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
-        console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
+        console.log('\n🔴🔴🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴🔴🔴');
+        console.log('📱 QR Code disponible à: /qrcode');
       }
       if (connection === 'close') {
         const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
         if (shouldReconnect) {
+          console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
+          console.log('⚠️ Déconnecté. Un nouveau QR code sera généré.');
           cleanAuthFiles();
           setTimeout(connectToWhatsApp, 10000);
         }
       } else if (connection === 'open') {
-        console.log('\n✅ CONNECTÉ À WHATSAPP ! ✅');
+        console.log('\n✅✅✅ CONNECTÉ À WHATSAPP ! ✅✅✅');
         currentQRCode = null;
       }
     });
+
+    sock.ev.on('messages.upsert', async (m) => {
+      const message = m.messages[0];
+      if (!message.key.fromMe && message.pushName) {
+        const buttonResponse = message.message?.buttonsResponseMessage;
+        if (buttonResponse) {
+          const { selectedButtonId, id: orderId } = buttonResponse;
+          const order = pendingOrders.get(orderId);
+          if (order) {
+            if (selectedButtonId === 'confirm_order') {
+              await sock.sendMessage(
+                `${order.phone.replace(/\D/g, '')}@s.whatsapp.net`,
+                { text: `✅ COMMANDE CONFIRMÉE pour ${order.product}` }
+              );
+            } else if (selectedButtonId === 'cancel_order') {
+              await sock.sendMessage(
+                `${order.phone.replace(/\D/g, '')}@s.whatsapp.net`,
+                { text: '❌ Commande annulée.' }
+              );
+            }
+            pendingOrders.delete(orderId);
+          }
+        }
+      }
+    });
+
   } catch (error) {
     console.error('❌ Erreur dans connectToWhatsApp :', error);
+    cleanAuthFiles();
     setTimeout(connectToWhatsApp, 10000);
   }
 }
 
-// --- 3. ENDPOINTS ---
+// --- 3. MIDDLEWARE POUR LES TIMEOUTS ---
+app.use((req, res, next) => {
+  // Timeout pour la requête (30 secondes)
+  req.setTimeout(30000, () => {
+    console.log('⏰ Timeout requête pour:', req.path);
+    if (!res.headersSent) {
+      res.status(408).json({ error: 'Request Timeout' });
+    }
+  });
+
+  // Timeout pour la réponse (30 secondes)
+  res.setTimeout(30000, () => {
+    console.log('⏰ Timeout réponse pour:', req.path);
+    if (!res.headersSent) {
+      res.status(504).json({ error: 'Response Timeout' });
+    }
+  });
+
+  next();
+});
+
+// --- 4. ENDPOINTS ---
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
     message: 'Serveur WhatsApp Alerts en ligne.',
     whatsappConnected: !!sock,
     qrCodeAvailable: !!currentQRCode,
+    endpoints: {
+      qrcode: '/qrcode',
+      sendAlert: '/send-order-alert'
+    }
   });
 });
 
 app.get('/qrcode', (req, res) => {
   if (!currentQRCode) {
-    return res.status(404).json({ status: 'error', message: 'Aucun QR code disponible.' });
+    return res.status(404).json({
+      status: 'error',
+      message: 'Aucun QR code disponible. Redémarrez le serveur.'
+    });
   }
+
   const base64Data = currentQRCode.replace(/^data:image\/png;base64,/, '');
   const imgBuffer = Buffer.from(base64Data, 'base64');
-  res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': imgBuffer.length });
+
+  res.writeHead(200, {
+    'Content-Type': 'image/png',
+    'Content-Length': imgBuffer.length
+  });
   res.end(imgBuffer);
 });
 
 app.all('/send-order-alert', async (req, res) => {
   try {
-    // --- DÉBOGAGE AVANCÉ ---
-    console.log('🔍 HEADERS:', req.headers);
-    console.log('🔍 BODY (raw):', req.body);
-    console.log('🔍 BODY (string):', JSON.stringify(req.body));
-    // --- FIN DÉBOGAGE ---
+    // Logs de débogage
+    console.log('🔍 [NEW REQUEST] Headers:', req.headers);
+    console.log('🔍 [NEW REQUEST] Body:', req.body);
 
     if (req.method === 'GET') {
       return res.status(200).json({
         status: 'success',
         message: 'Endpoint OK. Utilise POST pour envoyer une alerte.',
-        whatsappConnected: !!sock
+        whatsappConnected: !!sock,
+        examplePayload: {
+          phone: "+22791848270",
+          product: "Farine 25kg",
+          quantity: 5,
+          supplier: "Societe B",
+          threshold: 5,
+          orderld: "ORDER-123456"
+        }
       });
     }
 
-    // Vérifie que req.body n'est pas vide
+    // Vérifie que le body n'est pas vide
     if (!req.body || Object.keys(req.body).length === 0) {
       return res.status(400).json({
         status: 'error',
@@ -125,33 +194,88 @@ app.all('/send-order-alert', async (req, res) => {
       });
     }
 
-    const { phone, product, quantity, supplier, threshold, orderld } = req.body;
+    // Extrait les champs (accepte orderld OU orderId)
+    const { phone, product, quantity, supplier, threshold, orderld, orderId } = req.body;
+    const orderIdentifier = orderld || orderId;
 
-    // Affiche les valeurs extraites
-    console.log('🔍 Champs extraits:', { phone, product, quantity, supplier, threshold, orderld });
+    console.log('🔍 [EXTRACTED FIELDS]:', { phone, product, quantity, supplier, threshold, orderIdentifier });
 
-    if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderld) {
+    // Vérifie que tous les champs requis sont présents
+    if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderIdentifier) {
       return res.status(400).json({
         status: 'error',
-        message: `Données manquantes: ${Object.entries({ phone, product, quantity, supplier, threshold, orderld })
+        message: `Données manquantes: ${Object.entries({ phone, product, quantity, supplier, threshold, orderIdentifier })
           .filter(([_, value]) => !value && value !== 0)
           .map(([key]) => key)
-          .join(', ')}`
+          .join(', ')}`,
+        receivedData: req.body // Renvoie les données reçues pour débogage
       });
     }
 
-    // ... reste du code ...
+    // Vérifie que WhatsApp est connecté
+    if (!sock) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'WhatsApp non connecté. Scannez d\'abord le QR code à /qrcode',
+        receivedData: req.body
+      });
+    }
+
+    // Stocke la commande en attente
+    pendingOrders.set(orderIdentifier, { phone, product, quantity, supplier, threshold });
+
+    // Formate le numéro de téléphone
+    const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
+
+    // Envoie le message WhatsApp (sans await pour ne pas bloquer la réponse)
+    sock.sendMessage(formattedPhone, {
+      text: `🚨 ALERTE STOCK FAIBLE 🚨\n\n📦 Produit : ${product}\n📊 Quantité : ${quantity} (Seuil : ${threshold})\n🏪 Fournisseur : ${supplier}\n\nPasser une commande ?`,
+      buttons: [
+        { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui' }, type: 1 },
+        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non' }, type: 1 }
+      ],
+      footer: 'Répondez avec un bouton.'
+    }).catch(error => {
+      console.error('❌ Erreur WhatsApp:', error);
+    });
+
+    // Répond immédiatement (ne pas attendre la livraison du message)
+    return res.status(200).json({
+      status: 'success',
+      message: 'Alerte envoyée avec succès (en arrière-plan).',
+      orderId: orderIdentifier,
+      whatsappConnected: true
+    });
+
   } catch (error) {
     console.error('❌ Erreur dans /send-order-alert :', error);
     return res.status(500).json({
       status: 'error',
-      message: error.message || 'Erreur interne du serveur'
+      message: error.message || 'Erreur interne du serveur',
+      errorDetails: error.stack
     });
   }
 });
-// --- 4. DÉMARRAGE DU SERVEUR (TOUT À LA FIN) ---
-const PORT = process.env.PORT || 8080;  // <-- Utilise le port 8080
-app.listen(PORT, '0.0.0.0', () => {
+
+// --- 5. DÉMARRAGE DU SERVEUR ---
+const PORT = process.env.PORT || 8080;
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
+  console.log(`🌐 URL publique: https://whatsapp-alerts-production-af15.up.railway.app`);
   connectToWhatsApp();
+});
+
+// Gère les erreurs du serveur
+server.on('error', (error) => {
+  console.error('❌ Erreur du serveur:', error);
+  if (error.code === 'EADDRINUSE') {
+    console.log('⚠️ Port déjà utilisé. Essayons le port 3000...');
+    setTimeout(() => {
+      server.close();
+      server.listen(3000, '0.0.0.0', () => {
+        console.log(`🚀 Serveur démarré sur http://localhost:3000`);
+        connectToWhatsApp();
+      });
+    }, 1000);
+  }
 });
