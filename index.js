@@ -38,9 +38,9 @@ function cleanAuthFiles() {
   if (fs.existsSync(AUTH_DIR)) {
     try {
       fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      console.log('🧹 Session temporaire /tmp nettoyée.');
+      console.log('Base de session réinitialisée.');
     } catch (e) {
-      console.log('⚠️ Erreur lors du nettoyage :', e.message);
+      console.log('Erreur nettoyage temporaire :', e.message);
     }
   }
 }
@@ -80,7 +80,7 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Déconnecté définitivement. Nettoyage et génération d\'un nouveau QR code...');
+          console.log('⚠️ Session déconnectée. Nettoyage complet...');
           cleanAuthFiles();
           setTimeout(connectToWhatsApp, 10000);
         }
@@ -90,46 +90,54 @@ async function connectToWhatsApp() {
       }
     });
 
-    // ÉCOUTEUR INTERACTIF : Traite la réponse de l'utilisateur ('1' ou '2')
+    // ÉCOUTEUR INTERACTIF SÉCURISÉ CONTRE LES MESSAGES VIDES
     sock.ev.on('messages.upsert', async (m) => {
-      const message = m.messages[0];
-      if (!message.key.fromMe && message.message) {
+      try {
+        const message = m.messages[0];
+        // Sécurité : on s'assure que le message existe, ne vient pas de nous et contient un corps de message
+        if (!message || message.key.fromMe || !message.message) return;
+
         const from = message.key.remoteJid;
-        const textResponse = message.message.conversation || message.message.extendedTextMessage?.text;
+        
+        // Extraction sécurisée du texte (évite le crash "Cannot read properties of undefined")
+        const textResponse = message.message.conversation || 
+                             message.message.extendedTextMessage?.text || 
+                             "";
 
-        if (textResponse) {
-          const cleanText = textResponse.trim().toLowerCase();
-          
-          // Recherche d'une commande en attente liée à ce numéro d'expéditeur
-          let foundOrderId = null;
-          let foundOrder = null;
+        const cleanText = textResponse.trim().toLowerCase();
+        if (!cleanText) return; // Si aucun texte n'est extrait, on ignore
 
-          for (const [orderId, orderData] of pendingOrders.entries()) {
-            if (orderData.phoneJid === from) {
-              foundOrderId = orderId;
-              foundOrder = orderData;
-              break;
-            }
-          }
+        // Recherche d'une commande en attente liée à cet expéditeur
+        let foundOrderId = null;
+        let foundOrder = null;
 
-          if (foundOrder) {
-            if (cleanText === '1' || cleanText === 'oui') {
-              await sock.sendMessage(from, {
-                text: `✅ *COMMANDE CONFIRMÉE*\nLe processus d'achat a été validé pour le produit : *${foundOrder.product}*.`
-              });
-              pendingOrders.delete(foundOrderId);
-            } else if (cleanText === '2' || cleanText === 'non') {
-              await sock.sendMessage(from, {
-                text: `❌ *COMMANDE ANNULÉE*\nL'achat pour le produit *${foundOrder.product}* a été rejeté.`
-              });
-              pendingOrders.delete(foundOrderId);
-            } else {
-              await sock.sendMessage(from, {
-                text: `⚠️ *Option non reconnue.*\n\nVeuillez répondre uniquement :\n👉 *1* ou *Oui* (Pour confirmer)\n👉 *2* ou *Non* (Pour annuler)`
-              });
-            }
+        for (const [orderId, orderData] of pendingOrders.entries()) {
+          if (orderData.phoneJid === from) {
+            foundOrderId = orderId;
+            foundOrder = orderData;
+            break;
           }
         }
+
+        if (foundOrder) {
+          if (cleanText === '1' || cleanText === 'oui') {
+            await sock.sendMessage(from, {
+              text: `✅ *COMMANDE CONFIRMÉE*\nLe processus d'achat a été validé pour le produit : *${foundOrder.product}*.`
+            });
+            pendingOrders.delete(foundOrderId);
+          } else if (cleanText === '2' || cleanText === 'non') {
+            await sock.sendMessage(from, {
+              text: `❌ *COMMANDE ANNULÉE*\nL'achat pour le produit *${foundOrder.product}* a été rejeté.`
+            });
+            pendingOrders.delete(foundOrderId);
+          } else {
+            await sock.sendMessage(from, {
+              text: `⚠️ *Option non reconnue.*\n\nVeuillez répondre uniquement :\n👉 *1* ou *Oui* (Pour confirmer)\n👉 *2* ou *Non* (Pour annuler)`
+            });
+          }
+        }
+      } catch (upsertError) {
+        console.error('⚠️ Erreur lors du traitement du message reçu :', upsertError.message);
       }
     });
 
@@ -196,7 +204,7 @@ app.all('/send-order-alert', async (req, res) => {
 
     const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
 
-    // Sauvegarde en mémoire de l'alerte
+    // CORRECTION ICI : Utilisation de phoneJid pour correspondre parfaitement avec l'écouteur
     pendingOrders.set(orderIdentifier, {
       phoneJid: formattedPhone,
       product,
@@ -205,7 +213,7 @@ app.all('/send-order-alert', async (req, res) => {
       threshold
     });
 
-    // Format textuel interactif ultra-stable (Évite le crash des boutons)
+    // Format textuel interactif ultra-stable
     const alertMessage = `🚨 *ALERTE STOCK FAIBLE* 🚨\n\n` +
                          `📦 *Produit* : ${product}\n` +
                          `📊 *Quantité Actuelle* : ${quantity}\n` +
@@ -215,7 +223,6 @@ app.all('/send-order-alert', async (req, res) => {
                          `👉 Répondez *1* (ou *Oui*)\n` +
                          `👉 Répondez *2* (ou *Non*)`;
 
-    // Envoi effectif
     await sock.sendMessage(formattedPhone, { text: alertMessage });
 
     return res.status(200).json({
