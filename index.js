@@ -41,6 +41,7 @@ function cleanAuthFiles() {
   }
 }
 
+// --- Remplace ta fonction connectToWhatsApp() par ceci ---
 async function connectToWhatsApp() {
   try {
     cleanAuthFiles();
@@ -49,68 +50,49 @@ async function connectToWhatsApp() {
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: false,
+      printQRInTerminal: true,  // Affiche le QR dans les logs
       logger: pino({ level: 'error' }),
       browser: ['WhatsApp Alerts Bot', 'Chrome', '1.0.0'],
       version: version,
     });
 
+    // Attends que la connexion soit établie
+    await new Promise((resolve) => {
+      sock.ev.once('connection.update', (update) => {
+        if (update.connection === 'open') {
+          console.log('\n✅ CONNECTÉ À WHATSAPP ! ✅');
+          currentQRCode = null;
+          resolve();
+        } else if (update.qr) {
+          currentQRCode = update.qr;
+          console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
+          console.log('🌐 URL : https://whatsapp-alerts-production-af15.up.railway.app/qrcode');
+        }
+      });
+    });
+
     sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-      if (qr) {
-        currentQRCode = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
-        console.log('\n🔴🔴🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴🔴🔴');
-        console.log('📱 QR Code disponible à: /qrcode');
-      }
-      if (connection === 'close') {
-        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+    sock.ev.on('connection.update', (update) => {
+      if (update.connection === 'close') {
+        const shouldReconnect = update.lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
         if (shouldReconnect) {
-          console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Déconnecté. Un nouveau QR code sera généré.');
           cleanAuthFiles();
           setTimeout(connectToWhatsApp, 10000);
         }
-      } else if (connection === 'open') {
-        console.log('\n✅✅✅ CONNECTÉ À WHATSAPP ! ✅✅✅');
-        currentQRCode = null;
       }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
-      const message = m.messages[0];
-      if (!message.key.fromMe && message.pushName) {
-        const buttonResponse = message.message?.buttonsResponseMessage;
-        if (buttonResponse) {
-          const { selectedButtonId, id: orderId } = buttonResponse;
-          const order = pendingOrders.get(orderId);
-          if (order) {
-            if (selectedButtonId === 'confirm_order') {
-              await sock.sendMessage(
-                `${order.phone.replace(/\D/g, '')}@s.whatsapp.net`,
-                { text: `✅ COMMANDE CONFIRMÉE pour ${order.product}` }
-              );
-            } else if (selectedButtonId === 'cancel_order') {
-              await sock.sendMessage(
-                `${order.phone.replace(/\D/g, '')}@s.whatsapp.net`,
-                { text: '❌ Commande annulée.' }
-              );
-            }
-            pendingOrders.delete(orderId);
-          }
-        }
-      }
+      // ... (garde ton code existant)
     });
 
   } catch (error) {
-    console.error('❌ Erreur dans connectToWhatsApp :', error);
-    cleanAuthFiles();
+    console.error('❌ Erreur WhatsApp:', error);
     setTimeout(connectToWhatsApp, 10000);
   }
 }
-
 // --- 3. MIDDLEWARE POUR LES TIMEOUTS ---
 app.use((req, res, next) => {
   // Timeout pour la requête (30 secondes)
