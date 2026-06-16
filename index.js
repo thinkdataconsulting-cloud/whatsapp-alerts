@@ -27,10 +27,13 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// Variables globales
+// --- VARIABLES GLOBALES ---
 let sock;
 const pendingOrders = new Map();
 let currentQRCode = null;
+
+// Numéro de téléphone par défaut (ton numéro admin)
+const ADMIN_PHONE = process.env.ADMIN_PHONE_NUMBER || "+22791848270";
 
 // --- 2. FONCTIONS UTILITAIRES ---
 function cleanAuthFiles() {
@@ -49,18 +52,16 @@ async function connectToWhatsApp() {
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: true, // Affiche le QR dans les logs pour débogage
-      logger: pino({ level: 'silent' }), // Désactive les logs Baileys (trop verbeux)
-      browser: ['WhatsApp Alerts Bot', 'Chrome', '1.0.0'],
+      printQRInTerminal: true,
+      logger: pino({ level: 'silent' }),
+      browser: ['StockAlert Bot', 'Chrome', '1.0.0'],
       version: version,
     });
 
-    // Événement de mise à jour des crédentials
     sock.ev.on('creds.update', saveCreds);
 
-    // Événement de connexion
     sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr, isNewLogin } = update;
+      const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
         currentQRCode = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
@@ -86,7 +87,6 @@ async function connectToWhatsApp() {
       }
     });
 
-    // Événement de réception de message (pour les réponses aux boutons)
     sock.ev.on('messages.upsert', async (m) => {
       const message = m.messages[0];
       if (!message.key.fromMe && message.pushName) {
@@ -95,18 +95,17 @@ async function connectToWhatsApp() {
           const { selectedButtonId, id: orderId } = buttonResponse;
           const order = pendingOrders.get(orderId);
           if (order) {
-            const formattedPhone = order.phone.replace(/[^0-9]/g, '').replace(/^0+/, '') + '@s.whatsapp.net';
             try {
               if (selectedButtonId === 'confirm_order') {
-                await sock.sendMessage(formattedPhone, {
+                await sock.sendMessage(order.phone, {
                   text: `✅ COMMANDE CONFIRMÉE pour ${order.product}`
                 });
-                console.log(`✅ Commande confirmée pour ${order.product} (${formattedPhone})`);
+                console.log(`✅ Commande confirmée pour ${order.product} (${order.phone})`);
               } else if (selectedButtonId === 'cancel_order') {
-                await sock.sendMessage(formattedPhone, {
+                await sock.sendMessage(order.phone, {
                   text: `❌ Commande annulée pour ${order.product}`
                 });
-                console.log(`❌ Commande annulée pour ${order.product} (${formattedPhone})`);
+                console.log(`❌ Commande annulée pour ${order.product} (${order.phone})`);
               }
             } catch (error) {
               console.error('❌ Erreur lors de l\'envoi de la confirmation:', error);
@@ -117,7 +116,6 @@ async function connectToWhatsApp() {
       }
     });
 
-    // Événement d'erreur
     sock.ev.on('connection.error', (error) => {
       console.error('❌ Erreur de connexion WhatsApp:', error);
     });
@@ -155,9 +153,10 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
-    message: 'Serveur WhatsApp Alerts en ligne.',
+    message: 'Serveur Stock Alert en ligne.',
     whatsappConnected: !!sock,
     qrCodeAvailable: !!currentQRCode,
+    adminPhone: ADMIN_PHONE,
     endpoints: {
       qrcode: '/qrcode',
       sendAlert: '/send-order-alert'
@@ -183,22 +182,22 @@ app.get('/qrcode', (req, res) => {
 
 app.all('/send-order-alert', async (req, res) => {
   try {
-    console.log('\n📩 NOUVELLE REQUÊTE D\'ALERTE');
-    console.log('🔍 Headers:', req.headers);
-    console.log('🔍 Body:', req.body);
+    console.log('\n📩 NOUVELLE ALERTE STOCK');
+    console.log('🔍 Body reçu:', req.body);
 
     if (req.method === 'GET') {
       return res.status(200).json({
         status: 'success',
-        message: 'Endpoint OK. Utilise POST pour envoyer une alerte.',
+        message: 'Endpoint OK. Utilisez POST pour envoyer une alerte.',
         whatsappConnected: !!sock,
+        adminPhone: ADMIN_PHONE,
         examplePayload: {
-          phone: "+22791848270",
           product: "Farine 25kg",
           quantity: 5,
           supplier: "Societe B",
           threshold: 5,
-          orderld: "ORDER-123456"
+          orderld: "ORDER-123456",
+          phone: ADMIN_PHONE // Numéro par défaut
         }
       });
     }
@@ -211,17 +210,27 @@ app.all('/send-order-alert', async (req, res) => {
       });
     }
 
-    // Extrait les champs (accepte orderld OU orderId)
-    const { phone, product, quantity, supplier, threshold, orderld, orderId } = req.body;
-    const orderIdentifier = orderld || orderId;
+    // Extrait les champs
+    const { phone, product, quantity, supplier, threshold, orderld } = req.body;
 
-    console.log('🔍 Champs extraits:', { phone, product, quantity, supplier, threshold, orderIdentifier });
+    // Utilise le numéro du body ou le numéro admin par défaut
+    const finalPhone = phone || ADMIN_PHONE;
+    const orderIdentifier = orderld || `ORDER-${product}-${Date.now()}`;
+
+    console.log('🔍 Données traitées:', {
+      phone: finalPhone,
+      product,
+      quantity,
+      supplier,
+      threshold,
+      orderIdentifier
+    });
 
     // Vérifie que tous les champs requis sont présents
-    if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderIdentifier) {
+    if (!product || quantity === undefined || !supplier || threshold === undefined) {
       return res.status(400).json({
         status: 'error',
-        message: `Données manquantes: ${Object.entries({ phone, product, quantity, supplier, threshold, orderIdentifier })
+        message: `Données manquantes: ${Object.entries({ product, quantity, supplier, threshold })
           .filter(([_, value]) => !value && value !== 0)
           .map(([key]) => key)
           .join(', ')}`,
@@ -238,50 +247,43 @@ app.all('/send-order-alert', async (req, res) => {
       });
     }
 
-    // Formate le numéro de téléphone (supprime tous les caractères non numériques et les zéros initiaux)
-    const formattedPhone = phone.replace(/[^0-9]/g, '').replace(/^0+/, '') + '@s.whatsapp.net';
+    // Formate le numéro de téléphone
+    const formattedPhone = finalPhone.replace(/[^0-9]/g, '').replace(/^0+/, '') + '@s.whatsapp.net';
     console.log('📱 Numéro formaté:', formattedPhone);
 
     // Stocke la commande en attente
     pendingOrders.set(orderIdentifier, {
-      phone: formattedPhone, // Stocke le numéro formaté pour les réponses
+      phone: formattedPhone,
       product,
       quantity,
       supplier,
       threshold
     });
 
-    // Envoie le message WhatsApp
-    console.log('📤 Envoi du message WhatsApp...');
+    // Contenu du message
     const messageContent = {
-      text: `🚨 *ALERTE STOCK FAIBLE* 🚨\n\n📦 *Produit* : ${product}\n📊 *Quantité* : ${quantity} (Seuil: ${threshold})\n🏪 *Fournisseur* : ${supplier}\n\nPasser une commande ?`,
+      text: `🚨 *ALERTE RUPTURE DE STOCK* 🚨\n\n📦 *Produit* : ${product}\n📊 *Quantité actuelle* : ${quantity}\n⚠️ *Seuil minimal* : ${threshold}\n🏪 *Fournisseur* : ${supplier}\n\n💡 *Action requise* : Passer une commande ?`,
       buttons: [
         { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui, commander' }, type: 1 },
-        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non, annuler' }, type: 1 }
+        { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non, ignorer' }, type: 1 }
       ],
-      footer: 'Répondez avec un bouton pour confirmer.'
+      footer: 'StockAlert - Gestion des stocks'
     };
 
-    // Envoie le message et attend la confirmation
+    // Envoie le message WhatsApp
     try {
       await sock.sendMessage(formattedPhone, messageContent);
-      console.log('✅ Message WhatsApp envoyé avec succès à:', formattedPhone);
+      console.log('✅ Alerte envoyée à:', formattedPhone);
 
       return res.status(200).json({
         status: 'success',
-        message: 'Alerte envoyée avec succès !',
+        message: 'Alerte de rupture de stock envoyée avec succès !',
         orderId: orderIdentifier,
-        whatsappConnected: true,
-        sentTo: formattedPhone
+        sentTo: formattedPhone,
+        whatsappConnected: true
       });
     } catch (whatsappError) {
       console.error('❌ ÉCHEC de l\'envoi WhatsApp:', whatsappError);
-      console.error('🔍 Détails:', {
-        phone: formattedPhone,
-        error: whatsappError.message,
-        isOnline: sock?.ws?.readyState === 1
-      });
-
       return res.status(500).json({
         status: 'error',
         message: 'Échec de l\'envoi du message WhatsApp',
@@ -304,9 +306,10 @@ app.all('/send-order-alert', async (req, res) => {
 // --- 5. DÉMARRAGE DU SERVEUR ---
 const PORT = process.env.PORT || 8080;
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚀🚀🚀 SERVEUR DÉMARRÉ 🚀🚀🚀`);
+  console.log(`\n🚀🚀🚀 SERVEUR STOCK ALERT DÉMARRÉ 🚀🚀🚀`);
   console.log(`🌐 URL locale: http://localhost:${PORT}`);
   console.log(`🌐 URL publique: https://whatsapp-alerts-production-af15.up.railway.app`);
+  console.log(`📞 Numéro admin: ${ADMIN_PHONE}`);
   console.log(`📡 Endpoints:`);
   console.log(`   - GET  /          → État du serveur`);
   console.log(`   - GET  /qrcode    → QR Code pour la connexion WhatsApp`);
