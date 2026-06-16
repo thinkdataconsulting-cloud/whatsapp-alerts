@@ -70,7 +70,6 @@ async function connectToWhatsApp() {
       if (qr) {
         currentQRCode = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
         console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
-        console.log('📱 QR Code disponible à l\'adresse : /qrcode');
       }
 
       if (connection === 'close') {
@@ -90,15 +89,15 @@ async function connectToWhatsApp() {
       }
     });
 
-    // ÉCOUTEUR INTERACTIF : Comparaison robuste basée sur les chiffres uniquement
+    // ÉCOUTEUR INTERACTIF BLINDÉ CONTRE LES VALEURS UNDEFINED
     sock.ev.on('messages.upsert', async (m) => {
       try {
         const message = m.messages[0];
         if (!message || message.key.fromMe || !message.message) return;
 
         const from = message.key.remoteJid;
-        
-        // Extraction sécurisée du texte reçu
+        if (!from) return;
+
         const textResponse = message.message.conversation || 
                              message.message.extendedTextMessage?.text || 
                              "";
@@ -106,19 +105,21 @@ async function connectToWhatsApp() {
         const cleanText = textResponse.trim().toLowerCase();
         if (!cleanText) return; 
 
-        // Extraction des chiffres purs du numéro de l'expéditeur (ex: "22791848270")
         const senderDigits = from.replace(/\D/g, '');
+        if (!senderDigits) return;
 
         let foundOrderId = null;
         let foundOrder = null;
 
-        // Comparaison basée sur les chiffres uniquement pour éviter les conflits de format
+        // Boucle sécurisée avec vérification de l'existence de phoneJid
         for (const [orderId, orderData] of pendingOrders.entries()) {
-          const storedDigits = orderData.phoneJid.replace(/\D/g, '');
-          if (storedDigits === senderDigits) {
-            foundOrderId = orderId;
-            foundOrder = orderData;
-            break;
+          if (orderData && orderData.phoneJid) {
+            const storedDigits = orderData.phoneJid.replace(/\D/g, '');
+            if (storedDigits === senderDigits) {
+              foundOrderId = orderId;
+              foundOrder = orderData;
+              break;
+            }
           }
         }
 
@@ -140,7 +141,7 @@ async function connectToWhatsApp() {
           }
         }
       } catch (upsertError) {
-        console.error('⚠️ Erreur lors du traitement du message reçu :', upsertError.message);
+        console.error('⚠️ Erreur écouteur messages :', upsertError.message);
       }
     });
 
@@ -165,7 +166,6 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
-    message: 'Serveur WhatsApp Alerts en ligne.',
     whatsappConnected: !!sock && sock.ws?.readyState === 1,
     qrCodeAvailable: !!currentQRCode
   });
@@ -173,10 +173,7 @@ app.get('/', (req, res) => {
 
 app.get('/qrcode', (req, res) => {
   if (!currentQRCode) {
-    return res.status(404).json({
-      status: 'error',
-      message: 'Aucun QR code disponible ou déjà connecté.'
-    });
+    return res.status(404).json({ status: 'error', message: 'Aucun QR code disponible.' });
   }
   const base64Data = currentQRCode.replace(/^data:image\/png;base64,/, '');
   const imgBuffer = Buffer.from(base64Data, 'base64');
@@ -186,31 +183,42 @@ app.get('/qrcode', (req, res) => {
 
 app.all('/send-order-alert', async (req, res) => {
   try {
+    console.log('🔍 Payload reçu depuis n8n :', req.body);
+
     if (req.method === 'GET') {
-      return res.status(200).json({ status: 'success', message: 'Endpoint fonctionnel. Utilisez POST.' });
+      return res.status(200).json({ status: 'success', message: 'Utilisez POST.' });
     }
 
     if (!req.body || Object.keys(req.body).length === 0) {
-      return res.status(400).json({ status: 'error', message: 'Body de requête JSON vide.' });
+      return res.status(400).json({ status: 'error', message: 'Body vide.' });
     }
 
-    const { phone, product, quantity, supplier, threshold, orderld, orderId, orderID } = req.body;
+    // Gestion de la flexibilité des noms de variables (français/anglais/casse)
+    const { phone, telephone, product, quantity, supplier, threshold, orderld, orderId, orderID } = req.body;
+    
+    const finalPhone = phone || telephone;
     const orderIdentifier = orderld || orderId || orderID;
 
-    if (!phone || !product || quantity === undefined || !supplier || threshold === undefined || !orderIdentifier) {
+    if (!finalPhone || !product || quantity === undefined || !supplier || threshold === undefined || !orderIdentifier) {
       return res.status(400).json({ 
         status: 'error', 
-        message: `Données manquantes.`
+        message: `Données manquantes pour l'envoi.`,
+        received: req.body
       });
     }
 
     if (!sock || sock.ws?.readyState !== 1) {
-      return res.status(503).json({ status: 'error', message: 'WhatsApp non connecté sur le serveur Railway.' });
+      return res.status(503).json({ status: 'error', message: 'WhatsApp non connecté sur Railway.' });
     }
 
-    const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
+    const cleanedPhone = String(finalPhone).replace(/\D/g, '');
+    if (!cleanedPhone) {
+      return res.status(400).json({ status: 'error', message: 'Numéro de téléphone invalide.' });
+    }
 
-    // Stockage standardisé de la commande
+    const formattedPhone = cleanedPhone + '@s.whatsapp.net';
+
+    // Stockage propre et sécurisé
     pendingOrders.set(String(orderIdentifier), {
       phoneJid: formattedPhone,
       product,
