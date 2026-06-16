@@ -89,7 +89,7 @@ async function connectToWhatsApp() {
       }
     });
 
-    // ÉCOUTEUR INTERACTIF BLINDÉ CONTRE LES VALEURS UNDEFINED
+    // ÉCOUTEUR INTERACTIF OPTIMISÉ POUR MATCH LES NUMÉROS BRUTS
     sock.ev.on('messages.upsert', async (m) => {
       try {
         const message = m.messages[0];
@@ -98,6 +98,7 @@ async function connectToWhatsApp() {
         const from = message.key.remoteJid;
         if (!from) return;
 
+        // Récupération du texte
         const textResponse = message.message.conversation || 
                              message.message.extendedTextMessage?.text || 
                              "";
@@ -105,18 +106,19 @@ async function connectToWhatsApp() {
         const cleanText = textResponse.trim().toLowerCase();
         if (!cleanText) return; 
 
+        // Extraction stricte des chiffres de l'expéditeur (ex: 22791848270)
         const senderDigits = from.replace(/\D/g, '');
-        if (!senderDigits) return;
+        console.log(`📩 Message reçu de [${senderDigits}] : "${cleanText}"`);
 
-        let foundOrderId = null;
+        let foundOrderKey = null;
         let foundOrder = null;
 
-        // Boucle sécurisée avec vérification de l'existence de phoneJid
+        // Parcours global pour trouver une alerte en attente sur ce numéro
         for (const [orderId, orderData] of pendingOrders.entries()) {
           if (orderData && orderData.phoneJid) {
             const storedDigits = orderData.phoneJid.replace(/\D/g, '');
             if (storedDigits === senderDigits) {
-              foundOrderId = orderId;
+              foundOrderKey = orderId;
               foundOrder = orderData;
               break;
             }
@@ -124,19 +126,24 @@ async function connectToWhatsApp() {
         }
 
         if (foundOrder) {
+          console.log(`🎯 Alerte correspondante trouvée pour le produit : ${foundOrder.product}`);
+          
           if (cleanText === '1' || cleanText === 'oui') {
             await sock.sendMessage(from, {
-              text: `✅ *COMMANDE CONFIRMÉE*\nLe processus d'achat a été validé pour le produit : *${foundOrder.product}*.`
+              text: `✅ *COMMANDE CONFIRMÉE*\n\nLe processus d'achat a été validé avec succès pour le produit : *${foundOrder.product}*.\n\n_ID de session : ${foundOrderKey}_`
             });
-            pendingOrders.delete(foundOrderId);
+            pendingOrders.delete(foundOrderKey);
+            console.log(`✅ Commande ${foundOrderKey} validée et purgée.`);
           } else if (cleanText === '2' || cleanText === 'non') {
             await sock.sendMessage(from, {
-              text: `❌ *COMMANDE ANNULÉE*\nL'achat pour le produit *${foundOrder.product}* a été rejeté.`
+              text: `❌ *COMMANDE ANNULÉE*\n\nL'achat pour le produit *${foundOrder.product}* a été rejeté.`
             });
-            pendingOrders.delete(foundOrderId);
+            pendingOrders.delete(foundOrderKey);
+            console.log(`❌ Commande ${foundOrderKey} annulée et purgée.`);
           } else {
+            // Option d'aide si l'utilisateur répond autre chose
             await sock.sendMessage(from, {
-              text: `⚠️ *Option non reconnue.*\n\nVeuillez répondre uniquement :\n👉 *1* ou *Oui* (Pour confirmer)\n👉 *2* ou *Non* (Pour annuler)`
+              text: `⚠️ *Choix invalide.*\n\nUne alerte est en cours pour *${foundOrder.product}*.\n\nVeuillez répondre uniquement :\n👉 *1* ou *Oui* (Pour commander)\n👉 *2* ou *Non* (Pour annuler)`
             });
           }
         }
@@ -167,13 +174,13 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'success',
     whatsappConnected: !!sock && sock.ws?.readyState === 1,
-    qrCodeAvailable: !!currentQRCode
+    pendingOrdersCount: pendingOrders.size
   });
 });
 
 app.get('/qrcode', (req, res) => {
   if (!currentQRCode) {
-    return res.status(404).json({ status: 'error', message: 'Aucun QR code disponible.' });
+    return res.status(404).json({ status: 'error', message: 'Aucun QR code disponible ou déjà associé.' });
   }
   const base64Data = currentQRCode.replace(/^data:image\/png;base64,/, '');
   const imgBuffer = Buffer.from(base64Data, 'base64');
@@ -183,8 +190,6 @@ app.get('/qrcode', (req, res) => {
 
 app.all('/send-order-alert', async (req, res) => {
   try {
-    console.log('🔍 Payload reçu depuis n8n :', req.body);
-
     if (req.method === 'GET') {
       return res.status(200).json({ status: 'success', message: 'Utilisez POST.' });
     }
@@ -193,7 +198,7 @@ app.all('/send-order-alert', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Body vide.' });
     }
 
-    // Gestion de la flexibilité des noms de variables (français/anglais/casse)
+    // Capture exhaustive de toutes les typos possibles d'identifiants ou de numéros
     const { phone, telephone, product, quantity, supplier, threshold, orderld, orderId, orderID } = req.body;
     
     const finalPhone = phone || telephone;
@@ -202,13 +207,13 @@ app.all('/send-order-alert', async (req, res) => {
     if (!finalPhone || !product || quantity === undefined || !supplier || threshold === undefined || !orderIdentifier) {
       return res.status(400).json({ 
         status: 'error', 
-        message: `Données manquantes pour l'envoi.`,
+        message: "Données JSON incomplètes.",
         received: req.body
       });
     }
 
     if (!sock || sock.ws?.readyState !== 1) {
-      return res.status(503).json({ status: 'error', message: 'WhatsApp non connecté sur Railway.' });
+      return res.status(503).json({ status: 'error', message: 'WhatsApp déconnecté sur Railway.' });
     }
 
     const cleanedPhone = String(finalPhone).replace(/\D/g, '');
@@ -218,8 +223,8 @@ app.all('/send-order-alert', async (req, res) => {
 
     const formattedPhone = cleanedPhone + '@s.whatsapp.net';
 
-    // Stockage propre et sécurisé
-    pendingOrders.set(String(orderIdentifier), {
+    // Stockage persistant standardisé en mémoire vive
+    pendingOrders.set(String(orderIdentifier).trim(), {
       phoneJid: formattedPhone,
       product,
       quantity,
