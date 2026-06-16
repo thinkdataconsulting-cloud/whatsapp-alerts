@@ -225,7 +225,9 @@ app.all('/send-order-alert', async (req, res) => {
     pendingOrders.set(orderIdentifier, { phone, product, quantity, supplier, threshold });
 
     // Formate le numéro de téléphone
-    const formattedPhone = phone.replace(/\D/g, '') + '@s.whatsapp.net';
+    // Supprime TOUS les caractères non numériques, puis ajoute @s.whatsapp.net UNE SEULE FOIS
+	const formattedPhone = phone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+	console.log('📱 Numéro final:', formattedPhone); // Ajoute ce log pour vérifier
 
     // Envoie le message WhatsApp (sans await pour ne pas bloquer la réponse)
     sock.sendMessage(formattedPhone, {
