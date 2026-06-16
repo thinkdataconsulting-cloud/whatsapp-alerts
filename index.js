@@ -50,31 +50,29 @@ async function connectToWhatsApp() {
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: true,  // Affiche le QR dans les logs
+      printQRInTerminal: true,
       logger: pino({ level: 'error' }),
       browser: ['WhatsApp Alerts Bot', 'Chrome', '1.0.0'],
       version: version,
     });
 
-    // Attends que la connexion soit établie
-    await new Promise((resolve) => {
-      sock.ev.once('connection.update', (update) => {
-        if (update.connection === 'open') {
-          console.log('\n✅ CONNECTÉ À WHATSAPP ! ✅');
-          currentQRCode = null;
-          resolve();
-        } else if (update.qr) {
-          currentQRCode = update.qr;
-          console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
-          console.log('🌐 URL : https://whatsapp-alerts-production-af15.up.railway.app/qrcode');
-        }
-      });
-    });
+    // Utilise sock.ev.on au lieu de sock.ev.once
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-    sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', (update) => {
-      if (update.connection === 'close') {
-        const shouldReconnect = update.lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      if (qr) {
+        currentQRCode = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
+        console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
+        console.log('🌐 URL : https://whatsapp-alerts-production-af15.up.railway.app/qrcode');
+      }
+
+      if (connection === 'open') {
+        console.log('\n✅ CONNECTÉ À WHATSAPP ! ✅');
+        currentQRCode = null;
+      }
+
+      if (connection === 'close') {
+        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
         if (shouldReconnect) {
           setTimeout(connectToWhatsApp, 5000);
         } else {
@@ -84,6 +82,42 @@ async function connectToWhatsApp() {
       }
     });
 
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('messages.upsert', async (m) => {
+      const message = m.messages[0];
+      if (!message.key.fromMe && message.pushName) {
+        const buttonResponse = message.message?.buttonsResponseMessage;
+        if (buttonResponse) {
+          const { selectedButtonId, id: orderId } = buttonResponse;
+          const order = pendingOrders.get(orderId);
+          if (order) {
+            try {
+              if (selectedButtonId === 'confirm_order') {
+                await sock.sendMessage(
+                  `${order.phone.replace(/[^0-9]/g, '')}@s.whatsapp.net`,
+                  { text: `✅ COMMANDE CONFIRMÉE pour ${order.product}` }
+                );
+              } else if (selectedButtonId === 'cancel_order') {
+                await sock.sendMessage(
+                  `${order.phone.replace(/[^0-9]/g, '')}@s.whatsapp.net`,
+                  { text: '❌ Commande annulée.' }
+                );
+              }
+            } catch (error) {
+              console.error('❌ Erreur confirmation:', error);
+            }
+            pendingOrders.delete(orderId);
+          }
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur WhatsApp:', error);
+    setTimeout(connectToWhatsApp, 10000);
+  }
+}
     sock.ev.on('messages.upsert', async (m) => {
       // ... (garde ton code existant)
     });
