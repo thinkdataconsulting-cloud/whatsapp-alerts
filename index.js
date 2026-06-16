@@ -135,12 +135,21 @@ app.get('/qrcode', (req, res) => {
 
 app.post('/send-order-alert', async (req, res) => {
   try {
-    if (!sock) return res.status(503).json({ error: 'WhatsApp non connecté' });
+    // 1. Vérifie que WhatsApp est connecté
+    if (!sock || !sock.ws || sock.ws.readyState !== 1) {
+      return res.status(503).json({
+        error: "WhatsApp non connecté. Scannez le QR code à /qrcode"
+      });
+    }
 
-    const { phone, product, quantity, supplier, threshold, orderld } = req.body;
-    const finalPhone = phone || ADMIN_PHONE;
+    // 2. Récupère les données
+    const { product, quantity, supplier, threshold, orderld, phone } = req.body;
+    const finalPhone = phone || ADMIN_PHONE; // Utilise le numéro du body ou ton numéro admin
+
+    // 3. Formate le numéro
     const formattedPhone = finalPhone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
 
+    // 4. Envoie le message
     const message = {
       text: `🚨 ALERTE STOCK FAIBLE 🚨\n\nProduit: ${product}\nQuantité: ${quantity}\nSeuil: ${threshold}\nFournisseur: ${supplier}`,
       buttons: [
@@ -149,15 +158,15 @@ app.post('/send-order-alert', async (req, res) => {
       ]
     };
 
+    // 5. Envoie et répond
     await sock.sendMessage(formattedPhone, message);
-    res.json({ status: 'success', message: 'Alerte envoyée !', sentTo: formattedPhone });
+    res.json({ success: true, message: "Alerte envoyée !" });
 
   } catch (error) {
-    console.error('❌ Erreur:', error);
+    console.error("Erreur:", error);
     res.status(500).json({ error: error.message });
   }
 });
-
 // --- 8. DÉMARRAGE DU SERVEUR (TOUT À LA FIN) ---
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
