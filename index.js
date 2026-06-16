@@ -50,24 +50,29 @@ async function connectToWhatsApp() {
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: true,
+      printQRInTerminal: true,  // Affiche le QR dans les logs
       logger: pino({ level: 'error' }),
       browser: ['WhatsApp Alerts Bot', 'Chrome', '1.0.0'],
       version: version,
     });
 
-    sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        currentQRCode = await qrcode.toDataURL(qr, { width: 400, margin: 2 });
-        console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
-        console.log('🌐 URL : https://whatsapp-alerts-production-af15.up.railway.app/qrcode');
+        // Génère le QR code UNE SEULE FOIS
+        if (!currentQRCode) {
+          currentQRCode = qr; // Stocke l'objet QR, pas l'URL
+          console.log('\n🔴 NOUVEAU QR CODE GÉNÉRÉ 🔴');
+          console.log('🌐 URL : https://whatsapp-alerts-production-af15.up.railway.app/qrcode');
+        }
       }
 
       if (connection === 'open') {
         console.log('\n✅ CONNECTÉ À WHATSAPP ! ✅');
-        currentQRCode = null;
+        currentQRCode = null; // Réinitialise le QR code
       }
 
       if (connection === 'close') {
@@ -76,13 +81,23 @@ async function connectToWhatsApp() {
           console.log('🔄 Reconnexion dans 5 secondes...');
           setTimeout(connectToWhatsApp, 5000);
         } else {
-          console.log('⚠️ Déconnecté. Un nouveau QR code sera généré.');
+          console.log('⚠️ Déconnecté. Scannez un nouveau QR code.');
           cleanAuthFiles();
+          currentQRCode = null; // Réinitialise avant de reconnecter
           setTimeout(connectToWhatsApp, 10000);
         }
       }
     });
 
+    sock.ev.on('messages.upsert', async (m) => {
+      // ... (garde ton code existant)
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur WhatsApp:', error);
+    setTimeout(connectToWhatsApp, 10000);
+  }
+}
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('messages.upsert', async (m) => {
@@ -144,15 +159,24 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/qrcode', (req, res) => {
+app.get('/qrcode', async (req, res) => {
   if (!currentQRCode) {
-    return res.status(404).json({ error: 'Aucun QR code disponible' });
+    return res.status(404).json({
+      status: 'error',
+      message: 'Aucun QR code disponible. Attendez qu\'un nouveau soit généré.'
+    });
   }
-  const base64Data = currentQRCode.replace(/^data:image\/png;base64,/, '');
-  res.writeHead(200, { 'Content-Type': 'image/png' });
-  res.end(Buffer.from(base64Data, 'base64'));
-});
 
+  try {
+    // Génère l'image QR à partir de l'objet
+    const qrBuffer = await qrcode.toBuffer(currentQRCode, { width: 400, margin: 2 });
+    res.writeHead(200, { 'Content-Type': 'image/png' });
+    res.end(qrBuffer);
+  } catch (error) {
+    console.error('❌ Erreur QR code:', error);
+    res.status(500).json({ error: 'Erreur lors de la génération du QR code' });
+  }
+});
 app.post('/send-order-alert', async (req, res) => {
   try {
     if (!sock || sock.ws?.readyState !== 1) {
