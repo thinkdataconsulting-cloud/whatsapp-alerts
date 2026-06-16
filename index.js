@@ -265,7 +265,7 @@ app.post('/send-order-alert', async (req, res) => {
       threshold
     });
 
-    const message = `🚨 *ALERTE STOCK FAIBLE*\n\n📦 *Produit :* ${product}\n📊 *Quantité actuelle :* ${quantity}\n⚠️ *Seuil Minimal :* ${threshold}\n🏪 *Fournisseur :* ${supplier}\n\nSouhaitez-vous valider une commande de réapprovisionnement ?\n\n1️⃣ **Oui**\n2️⃣ **Non**`;
+    const message = `🚨 *ALERTE STOCK FAIBLE*\n\n📦 *Produit :* ${product}\n📊 *Quantité actuelle :* ${quantity}\n⚠️ *Seuil Minimal :* ${threshold}\n🏪 *Fournisseur :* ${supplier}\n\n ** Veuillez vous réapprovisionnez**`;
 
     console.log('📤 Envoi du message WhatsApp à :', whatsappId);
     await sock.sendMessage(whatsappId, { text: message });
