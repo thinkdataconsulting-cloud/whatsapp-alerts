@@ -36,27 +36,33 @@ async function initInstance(clientId) {
     sock.ev.on('creds.update', saveCreds);
 
     // Processus de connexion robuste
-    sock.ev.process(async (events) => {
-        if (events['connection.update']) {
-            const update = events['connection.update'];
-            const { connection, lastDisconnect, qr } = update;
-            
-            if (qr) instance.qr = qr;
-            if (connection === 'open') {
-                instance.connected = true;
-                instance.qr = null;
-                console.log(`✅ ${clientId} connecté !`);
-            }
-            if (connection === 'close') {
-                instance.connected = false;
-                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-                if (shouldReconnect) {
-                    console.log(`❌ ${clientId} déconnecté. Reconnexion...`);
-                    setTimeout(() => { instances.delete(clientId); initInstance(clientId); }, 5000);
-                }
+    // Remplacez votre logique actuelle par celle-ci
+sock.ev.process(async (events) => {
+    if (events['connection.update']) {
+        const update = events['connection.update'];
+        const { connection, lastDisconnect, qr } = update;
+        
+        if (qr) {
+            instance.qr = qr; // Le QR est reçu
+            console.log(`✅ QR reçu pour ${clientId}`);
+        }
+        
+        if (connection === 'open') {
+            instance.connected = true;
+            instance.qr = null;
+            console.log(`✅ ${clientId} connecté !`);
+        }
+        
+        if (connection === 'close') {
+            instance.connected = false;
+            // Si la déconnexion n'est pas voulue, on attend avant de retenter
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+                console.log(`❌ Déconnexion de ${clientId}. Tentative de reconnexion...`);
+                setTimeout(() => initInstance(clientId), 5000);
             }
         }
-    });
+    }
+});
 
     return instance;
 }
