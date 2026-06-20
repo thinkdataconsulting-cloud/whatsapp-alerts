@@ -22,13 +22,15 @@ async function initInstance(clientId) {
     const sock = makeWASocket({ 
         auth: state, 
         logger: pino({ level: 'silent' }),
-        browser: ['StockBot', 'Chrome', '110.0.0']
+        browser: ['StockBot', 'Chrome', '110.0.0'],
+        printQRInTerminal: false // Important pour ne pas polluer les logs
     });
 
     const instance = { sock, qr: null, connected: false };
     instances.set(clientId, instance);
 
     sock.ev.on('creds.update', saveCreds);
+    
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) instance.qr = qr;
@@ -39,8 +41,10 @@ async function initInstance(clientId) {
         }
         if (connection === 'close') {
             instance.connected = false;
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(() => initInstance(clientId), 5000);
+            // On tente de reconnecter seulement si ce n'est pas une déconnexion volontaire
+            if (lastDisconnect?.error?.output?.statusCode !== 401) {
+                setTimeout(() => initInstance(clientId), 5000);
+            }
         }
     });
 
