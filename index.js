@@ -12,7 +12,8 @@ const PORT = process.env.PORT || 8080;
 const instances = new Map();
 
 async function initInstance(clientId) {
-    console.log(`[INIT] Tentative pour: ${clientId}`);
+    if (instances.has(clientId)) return instances.get(clientId);
+
     const authDir = path.join(process.cwd(), `auth_${clientId}`);
     if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
@@ -21,47 +22,64 @@ async function initInstance(clientId) {
     const sock = makeWASocket({ 
         auth: state, 
         logger: pino({ level: 'silent' }),
-        browser: Browsers.macOS('Desktop'), // Utilise un profil plus récent
-        connectTimeoutMs: 60000 
+        browser: Browsers.windows('Desktop')
     });
 
-    instances.set(clientId, { sock, qr: null, connected: false });
+    const instance = { sock, qr: null, connected: false };
+    instances.set(clientId, instance);
 
     sock.ev.on('creds.update', saveCreds);
-
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            instances.get(clientId).qr = qr;
+        if (qr) instance.qr = qr;
+        if (connection === 'open') {
+            instance.connected = true;
+            instance.qr = null;
         }
         if (connection === 'close') {
+            instance.connected = false;
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log(`[RECONNECT] Tentative de reconnexion pour ${clientId}`);
-                setTimeout(() => initInstance(clientId), 5000);
-            }
-        } else if (connection === 'open') {
-            instances.get(clientId).connected = true;
-            instances.get(clientId).qr = null;
-            console.log(`[CONN] ${clientId} connecté`);
+            if (shouldReconnect) setTimeout(() => initInstance(clientId), 5000);
         }
     });
 
-    return sock;
+    return instance;
 }
 
+// Route d'envoi
+app.post('/send-alert/:clientId', async (req, res) => {
+    try {
+        const { clientId } = req.params;
+        const { phone, message } = req.body;
+        
+        let instance = instances.get(clientId) || await initInstance(clientId);
+
+        if (!instance.connected) {
+            return res.status(503).json({ error: 'Instance non connectée, scannez le QR' });
+        }
+        
+        const whatsappId = String(phone).replace(/\D/g, '') + '@s.whatsapp.net';
+        await instance.sock.sendMessage(whatsappId, { text: message });
+        res.json({ status: 'success' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Route QR
 app.get('/qr', async (req, res) => {
     const clientId = req.query.id;
-    if (!instances.has(clientId)) await initInstance(clientId);
-    const instance = instances.get(clientId);
-
-    if (instance.connected) return res.send('Connecté');
+    if (!clientId) return res.status(400).send('ID manquant');
+    
+    let instance = instances.get(clientId) || await initInstance(clientId);
+    
+    if (instance.connected) return res.send('✅ Déjà connecté');
     if (instance.qr) {
         const url = await qrcode.toDataURL(instance.qr);
         res.send(`<img src="${url}">`);
     } else {
-        res.send('QR en attente... rafraîchissez dans 10 secondes.');
+        res.send('🔄 Génération en cours... rafraîchissez dans 10 secondes.');
     }
 });
 
-app.listen(PORT, () => console.log('Serveur actif'));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur actif sur le port ${PORT}`));
