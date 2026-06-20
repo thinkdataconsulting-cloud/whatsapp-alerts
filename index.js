@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const express = require('express');
 const qrcode = require('qrcode');
 const pino = require('pino');
@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 8080;
 const instances = new Map();
 
 async function initInstance(clientId) {
-    console.log(`[INIT] Tentative d'initialisation pour: ${clientId}`);
+    console.log(`[INIT] Tentative pour: ${clientId}`);
     const authDir = path.join(process.cwd(), `auth_${clientId}`);
     if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
@@ -20,7 +20,9 @@ async function initInstance(clientId) {
     
     const sock = makeWASocket({ 
         auth: state, 
-        logger: pino({ level: 'debug' }) // Debug pour voir les détails
+        logger: pino({ level: 'silent' }),
+        browser: Browsers.macOS('Desktop'), // Utilise un profil plus récent
+        connectTimeoutMs: 60000 
     });
 
     instances.set(clientId, { sock, qr: null, connected: false });
@@ -30,30 +32,36 @@ async function initInstance(clientId) {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
-            console.log(`[QR] Code reçu pour ${clientId}`);
             instances.get(clientId).qr = qr;
         }
-        if (connection === 'open') {
-            console.log(`[CONN] ${clientId} connecté !`);
+        if (connection === 'close') {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) {
+                console.log(`[RECONNECT] Tentative de reconnexion pour ${clientId}`);
+                setTimeout(() => initInstance(clientId), 5000);
+            }
+        } else if (connection === 'open') {
             instances.get(clientId).connected = true;
+            instances.get(clientId).qr = null;
+            console.log(`[CONN] ${clientId} connecté`);
         }
     });
+
+    return sock;
 }
 
 app.get('/qr', async (req, res) => {
     const clientId = req.query.id;
-    if (!clientId) return res.send('ID manquant');
-    
     if (!instances.has(clientId)) await initInstance(clientId);
     const instance = instances.get(clientId);
 
-    if (instance.connected) return res.send('Déjà connecté');
+    if (instance.connected) return res.send('Connecté');
     if (instance.qr) {
         const url = await qrcode.toDataURL(instance.qr);
         res.send(`<img src="${url}">`);
     } else {
-        res.send('QR en cours de génération, rafraîchissez dans 5 secondes...');
+        res.send('QR en attente... rafraîchissez dans 10 secondes.');
     }
 });
 
-app.listen(PORT, () => console.log('Serveur prêt'));
+app.listen(PORT, () => console.log('Serveur actif'));
