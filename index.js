@@ -22,27 +22,33 @@ async function initInstance(clientId) {
     const sock = makeWASocket({ 
         auth: state, 
         logger: pino({ level: 'silent' }),
-        browser: ['StockBot', 'Chrome', '110.0.0'],
-        printQRInTerminal: false // Important pour ne pas polluer les logs
+        browser: ['StockBot', 'Chrome', '110.0.0']
     });
 
     const instance = { sock, qr: null, connected: false };
     instances.set(clientId, instance);
 
     sock.ev.on('creds.update', saveCreds);
-    
+
+    // Événement pour le QR code
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) instance.qr = qr;
+        
+        if (qr) {
+            instance.qr = qr;
+            console.log(`📸 QR Code généré pour ${clientId}`);
+        }
+        
         if (connection === 'open') {
             instance.connected = true;
             instance.qr = null;
-            console.log(`✅ Client ${clientId} connecté`);
+            console.log(`✅ ${clientId} connecté avec succès !`);
         }
+        
         if (connection === 'close') {
             instance.connected = false;
-            // On tente de reconnecter seulement si ce n'est pas une déconnexion volontaire
-            if (lastDisconnect?.error?.output?.statusCode !== 401) {
+            // Ne pas tenter de reconnecter si déconnecté volontairement
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
                 setTimeout(() => initInstance(clientId), 5000);
             }
         }
