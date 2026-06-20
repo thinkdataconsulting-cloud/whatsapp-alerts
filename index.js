@@ -24,16 +24,25 @@ app.get('/qr', (req, res) => {
 app.post('/send-order-alert', async (req, res) => {
     try {
         const { phone, message } = req.body;
-        if (!sock) return res.status(503).json({ status: 'error', message: 'Socket non initialisé' });
+        
+        // VÉRIFICATION DE SÉCURITÉ
+        // On vérifie si sock existe ET si sock.user est défini (ce qui confirme la connexion)
+        if (!sock || !sock.user || !sock.user.id) {
+            return res.status(503).json({ 
+                status: 'error', 
+                message: 'Le bot n\'est pas encore connecté à WhatsApp. Attendez quelques secondes et réessayez.' 
+            });
+        }
         
         const whatsappId = phone.replace(/\D/g, '') + '@s.whatsapp.net';
         await sock.sendMessage(whatsappId, { text: message });
+        
         return res.json({ status: 'success' });
     } catch (e) {
+        console.error('Erreur lors de l\'envoi :', e);
         return res.status(500).json({ status: 'error', message: e.message });
     }
 });
-
 // INITIALISATION BOT
 const startBot = async () => {
     try {
