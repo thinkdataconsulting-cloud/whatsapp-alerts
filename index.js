@@ -39,15 +39,19 @@ async function initInstance(clientId) {
     // Remplacez votre logique de gestion d'événement par ceci pour arrêter la boucle
 sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
-    if (qr) instance.qr = qr;
     
+    if (qr) instance.qr = qr;
+
     if (connection === 'close') {
+        // Vérifie si la déconnexion est intentionnelle
         const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-        console.log(`❌ Instance ${clientId} déconnectée. Tentative : ${shouldReconnect}`);
         
         if (shouldReconnect) {
-            // Au lieu de reconnecter tout de suite, attendez un peu pour laisser le réseau respirer
-            setTimeout(() => initInstance(clientId), 5000);
+            console.log(`❌ Instance ${clientId} déconnectée. Attente avant reconnexion...`);
+            // On attend 10 secondes au lieu de reconnecter instantanément en boucle
+            setTimeout(() => initInstance(clientId), 10000); 
+        } else {
+            console.log(`✅ Instance ${clientId} déconnectée proprement.`);
         }
     } else if (connection === 'open') {
         console.log(`✅ Instance ${clientId} connectée !`);
