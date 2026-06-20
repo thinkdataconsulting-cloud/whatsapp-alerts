@@ -90,21 +90,24 @@ async function connectToWhatsApp() {
 }
 
 // ROUTE AJUSTÉE POUR NE PLUS AVOIR D'ERREUR 400
+// Remplacez votre route actuelle par celle-ci dans index.js
 app.post('/send-order-alert', async (req, res) => {
   try {
     const { phone, telephone, product, quantity, supplier, threshold, orderId, message } = req.body;
     const finalPhone = phone || telephone;
 
+    // 1. Validation de base : on a besoin d'un numéro de téléphone
     if (!finalPhone) return res.status(400).json({ status: 'error', message: 'Numéro manquant' });
+    
+    // 2. Accepter soit un message, soit les composants pour le construire
     if (!message && !product) return res.status(400).json({ status: 'error', message: 'Contenu manquant' });
+
     if (!isWhatsAppConnected) return res.status(503).json({ status: 'error', message: 'WhatsApp déconnecté' });
 
-    const whatsappId = finalPhone.replace(/\D/g, '') + '@s.whatsapp.net';
-    const finalMessage = message || `🚨 *ALERTE STOCK*\n\n📦 *Produit :* ${product}\n📊 *Qté :* ${quantity}\n⚠️ *Seuil :* ${threshold}`;
-
-    if (orderId) {
-      pendingOrders.set(String(orderId).trim(), { phoneJid: whatsappId, product, quantity });
-    }
+    const whatsappId = String(finalPhone).replace(/\D/g, '') + '@s.whatsapp.net';
+    
+    // Utilise le message envoyé par n8n s'il existe, sinon le génère
+    const finalMessage = message || `🚨 *ALERTE STOCK*\n\n📦 *Produit :* ${product}\n📊 *Qté :* ${quantity}\n⚠️ *Seuil :* ${threshold}\n🏪 *Fournisseur :* ${supplier}`;
 
     await sock.sendMessage(whatsappId, { text: finalMessage });
     return res.json({ status: 'success' });
@@ -112,7 +115,6 @@ app.post('/send-order-alert', async (req, res) => {
     return res.status(500).json({ status: 'error', message: error.message });
   }
 });
-
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur actif sur le port ${PORT}`);
   connectToWhatsApp();
