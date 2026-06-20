@@ -24,12 +24,13 @@ async function initInstance(clientId) {
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     
-    // Ajout de 'printQRInTerminal: false' pour éviter les erreurs d'affichage
+    // Ajout d'une configuration plus stable
     const sock = makeWASocket({ 
         auth: state, 
         logger: pino({ level: 'silent' }),
-        browser: ['StockBot', 'Chrome', '1.0.0'],
-        connectTimeoutMs: 60000 // On augmente le temps d'attente
+        printQRInTerminal: false,
+        browser: ['Ubuntu', 'Chrome', '110.0.0'], // Simulation d'un navigateur PC
+        defaultQueryTimeoutMs: 60000 
     });
 
     const instance = { sock, qr: null, connected: false };
@@ -38,21 +39,27 @@ async function initInstance(clientId) {
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            instance.qr = qr;
+        
+        // Si on reçoit un QR, on le stocke
+        if (qr) instance.qr = qr;
+        
+        if (connection === 'open') {
+            instance.connected = true;
+            instance.qr = null;
+            console.log(`✅ Instance ${clientId} connectée !`);
         }
-        if (connection === 'open') { 
-            instance.connected = true; 
-            instance.qr = null; 
-        }
+        
         if (connection === 'close') {
             instance.connected = false;
-            // Ne pas supprimer l'instance ici, juste marquer comme déconnecté
+            // Si c'est une déconnexion, on supprime l'instance pour repartir à zéro
+            instances.delete(clientId);
+            console.log(`❌ Instance ${clientId} déconnectée. Tentative de reconnexion...`);
         }
     });
 
     return instance;
 }
+
 
 // ROUTE QR : /qr?id=client_A
 app.get('/qr', async (req, res) => {
