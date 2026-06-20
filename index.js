@@ -4,19 +4,12 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
-// Initialisation globale crypto pour Baileys
-if (!globalThis.crypto) {
-    globalThis.crypto = { getRandomValues: (buffer) => crypto.randomBytes(buffer.length), subtle: crypto.webcrypto.subtle };
-}
-
-// 1. Initialisation de l'application Express (D'ABORD)
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 8080;
-const instances = new Map();
+const instances = new Map(); // Stocke toutes les instances actives
 
 async function initInstance(clientId) {
     if (instances.has(clientId)) return instances.get(clientId);
@@ -36,51 +29,37 @@ async function initInstance(clientId) {
     instances.set(clientId, instance);
 
     sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.process(async (events) => {
-        if (events['connection.update']) {
-            const update = events['connection.update'];
-            const { connection, lastDisconnect, qr } = update;
-            
-            if (qr) instance.qr = qr;
-            
-            if (connection === 'open') {
-                instance.connected = true;
-                instance.qr = null;
-            }
-            
-            if (connection === 'close') {
-                instance.connected = false;
-                if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-                    setTimeout(() => initInstance(clientId), 5000);
-                }
-            }
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        if (qr) instance.qr = qr;
+        if (connection === 'open') {
+            instance.connected = true;
+            instance.qr = null;
+            console.log(`✅ Client ${clientId} connecté`);
+        }
+        if (connection === 'close') {
+            instance.connected = false;
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) setTimeout(() => initInstance(clientId), 5000);
         }
     });
+
     return instance;
 }
 
-// 2. Définition des routes (APRÈS l'initialisation de app)
-app.get('/qr', async (req, res) => {
-    const clientId = req.query.id;
-    if (!clientId) return res.status(400).send('ID client manquant');
-    let instance = instances.get(clientId) || await initInstance(clientId);
-    if (instance.connected) return res.send(`<h2>✅ ${clientId} est connecté.</h2>`);
-    if (instance.qr) {
-        const qrImage = await qrcode.toDataURL(instance.qr);
-        res.send(`<div style="text-align:center"><h2>Scan pour ${clientId}</h2><img src="${qrImage}"/><script>setTimeout(()=>location.reload(), 5000)</script></div>`);
-    } else {
-        res.send(`<h2>🔄 Génération QR...</h2><script>setTimeout(()=>location.reload(), 3000)</script>`);
-    }
-});
-
+// Route d'envoi : l'ID est dans l'URL (ex: /send-alert/Stock_Client_A)
 app.post('/send-alert/:clientId', async (req, res) => {
     const { clientId } = req.params;
     const { phone, message } = req.body;
-    const instance = instances.get(clientId);
-    
-    if (!instance || !instance.connected) {
-        return res.status(503).json({ error: 'Instance non connectée' });
+
+    // Initialisation auto si le client n'existe pas encore en mémoire
+    let instance = instances.get(clientId);
+    if (!instance) {
+        instance = await initInstance(clientId);
+    }
+
+    if (!instance.connected) {
+        return res.status(503).json({ error: 'Instance non connectée, scannez le QR code' });
     }
     
     try {
@@ -92,5 +71,19 @@ app.post('/send-alert/:clientId', async (req, res) => {
     }
 });
 
-// 3. Lancement du serveur
+// Route pour afficher le QR code spécifique au client
+app.get('/qr', async (req, res) => {
+    const clientId = req.query.id;
+    if (!clientId) return res.status(400).send('ID client manquant');
+    let instance = instances.get(clientId) || await initInstance(clientId);
+    
+    if (instance.connected) return res.send(`<h2>✅ ${clientId} connecté.</h2>`);
+    if (instance.qr) {
+        const qrImage = await qrcode.toDataURL(instance.qr);
+        res.send(`<div style="text-align:center"><h2>Scan pour ${clientId}</h2><img src="${qrImage}"/></div>`);
+    } else {
+        res.send(`<h2>🔄 Initialisation... patientez quelques secondes et rafraîchissez.</h2>`);
+    }
+});
+
 app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur actif sur le port ${PORT}`));
