@@ -6,14 +6,13 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
-const instances = new Map(); // Stocke toutes les instances actives
+const instances = new Map();
 
 async function initInstance(clientId) {
-    if (instances.has(clientId)) return instances.get(clientId);
-
+    console.log(`[INIT] Tentative d'initialisation pour: ${clientId}`);
     const authDir = path.join(process.cwd(), `auth_${clientId}`);
     if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
@@ -21,79 +20,40 @@ async function initInstance(clientId) {
     
     const sock = makeWASocket({ 
         auth: state, 
-        logger: pino({ level: 'silent' }),
-        browser: ['StockBot', 'Chrome', '110.0.0']
+        logger: pino({ level: 'debug' }) // Debug pour voir les détails
     });
 
-    const instance = { sock, qr: null, connected: false };
-    instances.set(clientId, instance);
+    instances.set(clientId, { sock, qr: null, connected: false });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Événement pour le QR code
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
         if (qr) {
-            instance.qr = qr;
-            console.log(`📸 QR Code généré pour ${clientId}`);
+            console.log(`[QR] Code reçu pour ${clientId}`);
+            instances.get(clientId).qr = qr;
         }
-        
         if (connection === 'open') {
-            instance.connected = true;
-            instance.qr = null;
-            console.log(`✅ ${clientId} connecté avec succès !`);
-        }
-        
-        if (connection === 'close') {
-            instance.connected = false;
-            // Ne pas tenter de reconnecter si déconnecté volontairement
-            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-                setTimeout(() => initInstance(clientId), 5000);
-            }
+            console.log(`[CONN] ${clientId} connecté !`);
+            instances.get(clientId).connected = true;
         }
     });
-
-    return instance;
 }
 
-// Route d'envoi : l'ID est dans l'URL (ex: /send-alert/Stock_Client_A)
-app.post('/send-alert/:clientId', async (req, res) => {
-    const { clientId } = req.params;
-    const { phone, message } = req.body;
-
-    // Initialisation auto si le client n'existe pas encore en mémoire
-    let instance = instances.get(clientId);
-    if (!instance) {
-        instance = await initInstance(clientId);
-    }
-
-    if (!instance.connected) {
-        return res.status(503).json({ error: 'Instance non connectée, scannez le QR code' });
-    }
-    
-    try {
-        const whatsappId = String(phone).replace(/\D/g, '') + '@s.whatsapp.net';
-        await instance.sock.sendMessage(whatsappId, { text: message });
-        res.json({ status: 'success' });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Route pour afficher le QR code spécifique au client
 app.get('/qr', async (req, res) => {
     const clientId = req.query.id;
-    if (!clientId) return res.status(400).send('ID client manquant');
-    let instance = instances.get(clientId) || await initInstance(clientId);
+    if (!clientId) return res.send('ID manquant');
     
-    if (instance.connected) return res.send(`<h2>✅ ${clientId} connecté.</h2>`);
+    if (!instances.has(clientId)) await initInstance(clientId);
+    const instance = instances.get(clientId);
+
+    if (instance.connected) return res.send('Déjà connecté');
     if (instance.qr) {
-        const qrImage = await qrcode.toDataURL(instance.qr);
-        res.send(`<div style="text-align:center"><h2>Scan pour ${clientId}</h2><img src="${qrImage}"/></div>`);
+        const url = await qrcode.toDataURL(instance.qr);
+        res.send(`<img src="${url}">`);
     } else {
-        res.send(`<h2>🔄 Initialisation... patientez quelques secondes et rafraîchissez.</h2>`);
+        res.send('QR en cours de génération, rafraîchissez dans 5 secondes...');
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur actif sur le port ${PORT}`));
+app.listen(PORT, () => console.log('Serveur prêt'));
