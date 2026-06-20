@@ -17,31 +17,36 @@ const PORT = process.env.PORT || 8080;
 const instances = new Map(); // Stocke toutes les instances actives par ID client
 
 async function initInstance(clientId) {
+    if (instances.has(clientId)) return instances.get(clientId);
+
     const authDir = path.join(process.cwd(), `auth_${clientId}`);
     if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({ auth: state, version, logger: pino({ level: 'silent' }) });
     
+    // Ajout d'une protection contre le plantage mémoire
+    const sock = makeWASocket({ 
+        auth: state, 
+        logger: pino({ level: 'silent' }),
+        browser: ['StockBot', 'Chrome', '1.0.0'],
+        qrTimeout: 30000 // Timeout court pour éviter de bloquer la mémoire
+    });
+
     const instance = { sock, qr: null, connected: false };
     instances.set(clientId, instance);
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) qrcode.toDataURL(qr).then(url => instance.qr = url);
+        if (qr) instance.qr = qr; // On stocke le QR brut
         if (connection === 'open') { instance.connected = true; instance.qr = null; }
         if (connection === 'close') {
             instance.connected = false;
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(() => initInstance(clientId), 5000);
+            // On ne reconnecte plus en boucle pour éviter le SIGTERM
         }
     });
     return instance;
 }
-
 // ROUTE QR : /qr?id=client_A
 app.get('/qr', async (req, res) => {
     const clientId = req.query.id;
