@@ -21,17 +21,18 @@ async function initInstance(clientId) {
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     
     const sock = makeWASocket({ 
-        auth: state, 
-        logger: pino({ level: 'silent' }),
-        browser: Browsers.windows('Chrome'), // Plus stable sur serveur
-        patchMessageBeforeSending: (msg) => {
-            const needsPatch = !!(msg.buttonsMessage || msg.templateMessage || msg.listMessage);
-            if (needsPatch) {
-                msg = { ...msg, ...{ viewOnceMessage: { message: { messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} }, ...msg } } } };
-            }
-            return msg;
+    auth: state, 
+    logger: pino({ level: 'silent' }),
+    // FORCEZ un navigateur moderne et un User-Agent valide
+    browser: ['Chrome', 'Chrome', '124.0.6367.207'], 
+    patchMessageBeforeSending: (msg) => {
+        const needsPatch = !!(msg.buttonsMessage || msg.templateMessage || msg.listMessage);
+        if (needsPatch) {
+            msg = { ...msg, ...{ viewOnceMessage: { message: { messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} }, ...msg } } } };
         }
-    });
+        return msg;
+    }
+});
 
     const instance = { sock, qr: null, connected: false };
     instances.set(clientId, instance);
