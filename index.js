@@ -36,29 +36,23 @@ async function initInstance(clientId) {
     const instance = { sock, qr: null, connected: false };
     instances.set(clientId, instance);
 
-    sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    // Remplacez votre logique de gestion d'événement par ceci pour arrêter la boucle
+sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect, qr } = update;
+    if (qr) instance.qr = qr;
+    
+    if (connection === 'close') {
+        const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+        console.log(`❌ Instance ${clientId} déconnectée. Tentative : ${shouldReconnect}`);
         
-        // Si on reçoit un QR, on le stocke
-        if (qr) instance.qr = qr;
-        
-        if (connection === 'open') {
-            instance.connected = true;
-            instance.qr = null;
-            console.log(`✅ Instance ${clientId} connectée !`);
+        if (shouldReconnect) {
+            // Au lieu de reconnecter tout de suite, attendez un peu pour laisser le réseau respirer
+            setTimeout(() => initInstance(clientId), 5000);
         }
-        
-        if (connection === 'close') {
-            instance.connected = false;
-            // Si c'est une déconnexion, on supprime l'instance pour repartir à zéro
-            instances.delete(clientId);
-            console.log(`❌ Instance ${clientId} déconnectée. Tentative de reconnexion...`);
-        }
-    });
-
-    return instance;
-}
+    } else if (connection === 'open') {
+        console.log(`✅ Instance ${clientId} connectée !`);
+    }
+});
 
 
 // ROUTE QR : /qr?id=client_A
