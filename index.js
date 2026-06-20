@@ -14,7 +14,7 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 8080;
-const instances = new Map(); // Stocke toutes les instances actives par ID client
+const instances = new Map();
 
 async function initInstance(clientId) {
     if (instances.has(clientId)) return instances.get(clientId);
@@ -24,81 +24,81 @@ async function initInstance(clientId) {
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     
-    // Ajout d'une configuration plus stable
     const sock = makeWASocket({ 
         auth: state, 
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
-        browser: ['Ubuntu', 'Chrome', '110.0.0'], // Simulation d'un navigateur PC
-        defaultQueryTimeoutMs: 60000 
+        browser: ['StockBot', 'Chrome', '110.0.0']
     });
 
     const instance = { sock, qr: null, connected: false };
     instances.set(clientId, instance);
 
-    // Remplacez votre logique de gestion d'événement par ceci pour arrêter la boucle
-sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect, qr } = update;
-    
-    if (qr) instance.qr = qr;
+    sock.ev.on('creds.update', saveCreds);
 
-    if (connection === 'close') {
-        // Vérifie si la déconnexion est intentionnelle
-        const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-        
-        if (shouldReconnect) {
-            console.log(`❌ Instance ${clientId} déconnectée. Attente avant reconnexion...`);
-            // On attend 10 secondes au lieu de reconnecter instantanément en boucle
-            setTimeout(() => initInstance(clientId), 10000); 
-        } else {
-            console.log(`✅ Instance ${clientId} déconnectée proprement.`);
+    // Processus de connexion robuste
+    sock.ev.process(async (events) => {
+        if (events['connection.update']) {
+            const update = events['connection.update'];
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) instance.qr = qr;
+            if (connection === 'open') {
+                instance.connected = true;
+                instance.qr = null;
+                console.log(`✅ ${clientId} connecté !`);
+            }
+            if (connection === 'close') {
+                instance.connected = false;
+                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+                if (shouldReconnect) {
+                    console.log(`❌ ${clientId} déconnecté. Reconnexion...`);
+                    setTimeout(() => { instances.delete(clientId); initInstance(clientId); }, 5000);
+                }
+            }
         }
-    } else if (connection === 'open') {
-        console.log(`✅ Instance ${clientId} connectée !`);
-    }
-});
+    });
 
+    return instance;
+}
 
-// ROUTE QR : /qr?id=client_A
+// ROUTE QR avec génération d'image réelle
 app.get('/qr', async (req, res) => {
     const clientId = req.query.id;
-    if (!clientId) return res.status(400).send('ID client manquant (ex: /qr?id=client_A)');
+    if (!clientId) return res.status(400).send('ID client manquant');
     
     let instance = instances.get(clientId) || await initInstance(clientId);
     
     if (instance.connected) return res.send(`<h2>✅ ${clientId} est connecté.</h2>`);
-    if (!instance.qr) return res.send(`<h2>🔄 Génération QR pour ${clientId}...</h2><script>setTimeout(()=>location.reload(), 3000)</script>`);
     
-    res.send(`<div style="text-align:center"><h2>Scan pour ${clientId}</h2><img src="${instance.qr}"/><script>setTimeout(()=>location.reload(), 5000)</script></div>`);
+    if (instance.qr) {
+        const qrImage = await qrcode.toDataURL(instance.qr);
+        res.send(`<div style="text-align:center"><h2>Scan pour ${clientId}</h2><img src="${qrImage}"/><script>setTimeout(()=>location.reload(), 5000)</script></div>`);
+    } else {
+        res.send(`<h2>🔄 Génération QR...</h2><script>setTimeout(()=>location.reload(), 3000)</script>`);
+    }
 });
 
-// ROUTE LOGOUT : /logout?id=client_A
 app.get('/logout', async (req, res) => {
     const clientId = req.query.id;
     if (instances.has(clientId)) {
-        const instance = instances.get(clientId);
-        await instance.sock.logout();
+        await instances.get(clientId).sock.logout().catch(() => {});
         fs.rmSync(path.join(process.cwd(), `auth_${clientId}`), { recursive: true, force: true });
         instances.delete(clientId);
     }
     res.send(`<h2>${clientId} déconnecté.</h2>`);
 });
 
-// ROUTE ALERTE : /send-alert/:clientId
 app.post('/send-alert/:clientId', async (req, res) => {
-    const { clientId } = req.params;
-    const { phone, message } = req.body;
-    
-    const instance = instances.get(clientId);
+    const instance = instances.get(req.params.clientId);
     if (!instance || !instance.connected) return res.status(503).send('Instance non connectée');
-
+    
     try {
-        const whatsappId = String(phone).replace(/\D/g, '') + '@s.whatsapp.net';
-        await instance.sock.sendMessage(whatsappId, { text: message });
+        const whatsappId = String(req.body.phone).replace(/\D/g, '') + '@s.whatsapp.net';
+        await instance.sock.sendMessage(whatsappId, { text: req.body.message });
         res.json({ status: 'success' });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur multi-instances actif`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur actif`));
