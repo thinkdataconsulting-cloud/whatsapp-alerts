@@ -6,36 +6,56 @@ if (!globalThis.crypto) {
 
 const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const express = require('express');
+const qrcode = require('qrcode');
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
+let currentQRCode = '';
+let sock = null;
 
-// Routes définies AVANT le démarrage du socket
-app.get('/status', (req, res) => res.json({ status: 'OK' }));
-
+// ROUTE QR CODE
 app.get('/qr', (req, res) => {
-    res.send('<h2>Service en cours de configuration.</h2>');
+    if (!currentQRCode) return res.send('<h2>Génération du QR... rechargez la page dans quelques secondes.</h2>');
+    res.send(`<div style="text-align:center; margin-top:50px;"><h2>Scannez ce QR Code avec WhatsApp</h2><img src="${currentQRCode}"/><script>setTimeout(()=>location.reload(), 5000)</script></div>`);
 });
 
+// ROUTE ENVOI MESSAGE
 app.post('/send-order-alert', async (req, res) => {
-    res.json({ status: 'Reçu' });
+    try {
+        const { phone, message } = req.body;
+        if (!sock) return res.status(503).json({ status: 'error', message: 'Socket non initialisé' });
+        
+        const whatsappId = phone.replace(/\D/g, '') + '@s.whatsapp.net';
+        await sock.sendMessage(whatsappId, { text: message });
+        return res.json({ status: 'success' });
+    } catch (e) {
+        return res.status(500).json({ status: 'error', message: e.message });
+    }
 });
 
-// Démarrage du serveur Express
+// INITIALISATION BOT
+const startBot = async () => {
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+        sock = makeWASocket({ auth: state, printQRInTerminal: false });
+        
+        sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('connection.update', (update) => {
+            const { qr, connection } = update;
+            if (qr) qrcode.toDataURL(qr).then(url => currentQRCode = url);
+            if (connection === 'open') {
+                console.log('✅ WhatsApp connecté !');
+                currentQRCode = '';
+            }
+        });
+        console.log('Bot WhatsApp initialisé');
+    } catch (err) {
+        console.error('Erreur critique:', err);
+    }
+};
+
 app.listen(PORT, '0.0.0.0', () => {
-    console.log('Serveur Express actif sur le port ' + PORT);
-    
-    // Initialisation du Bot
-    const startBot = async () => {
-        try {
-            const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-            const sock = makeWASocket({ auth: state });
-            sock.ev.on('creds.update', saveCreds);
-            console.log('Bot WhatsApp initialisé avec succès');
-        } catch (err) {
-            console.error('Erreur critique Baileys:', err);
-        }
-    };
+    console.log('Serveur actif sur le port ' + PORT);
     startBot();
 });
