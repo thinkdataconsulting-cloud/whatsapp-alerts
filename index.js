@@ -35,8 +35,8 @@ if (!globalThis.crypto) {
                 const hash = require('crypto').createHash(algorithm.toLowerCase().replace('-', ''));
                 hash.update(data);
                 return new Uint8Array(hash.digest());
-            },
-        },
+            }
+        }
     };
 }
 
@@ -96,7 +96,9 @@ async function initInstance(clientId, phoneNumber) {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             if (statusCode === DisconnectReason.loggedOut) {
                 console.log(`🔴 ${clientId} déconnecté (logout)`);
-                try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (e) {}
+                try {
+                    fs.rmSync(authDir, { recursive: true, force: true });
+                } catch (e) {}
                 instances.delete(clientId);
             }
         }
@@ -166,14 +168,10 @@ app.get('/scan-qr', async (req, res) => {
                 <head>
                     <meta charset="UTF-8">
                     <title>Erreur - StockAlert</title>
-                    <style>
-                        body { font-family: Arial; text-align: center; margin-top: 50px; }
-                        .error { color: red; }
-                    </style>
                 </head>
                 <body>
                     <h2>❌ Erreur interne</h2>
-                    <p class="error">Instance perdue. Veuillez réessayer.</p>
+                    <p>Instance perdue. Veuillez réessayer.</p>
                 </body>
                 </html>
             `);
@@ -189,12 +187,11 @@ app.get('/scan-qr', async (req, res) => {
                     <style>
                         body { font-family: Arial; text-align: center; margin-top: 50px; }
                         .success { color: #25D366; }
-                        .phone { font-size: 1.2em; margin: 10px; }
                     </style>
                 </head>
                 <body>
                     <h2>✅ WhatsApp connecté !</h2>
-                    <p class="success">Le client <strong>${clientId}</strong> est connecté avec le numéro <span class="phone">${phoneNumber}</span>.</p>
+                    <p class="success">Le client <strong>${clientId}</strong> est connecté avec le numéro <strong>${phoneNumber}</strong>.</p>
                     <p>Vous pouvez maintenant recevoir des alertes.</p>
                 </body>
                 </html>
@@ -211,34 +208,20 @@ app.get('/scan-qr', async (req, res) => {
                     <title>QR Code - StockAlert</title>
                     <style>
                         body { font-family: Arial; text-align: center; margin: 20px; }
-                        h2 { color: #25D366; }
                         .container { max-width: 400px; margin: 0 auto; }
-                        .qr-code { margin: 20px; }
                         .qr-code img { max-width: 100%; border: 1px solid #ddd; border-radius: 5px; }
-                        .instructions { margin: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; }
-                        .client-info { margin: 10px; font-size: 1.1em; }
-                        .refresh-btn { margin: 20px; }
                         button { padding: 10px 20px; background: #25D366; color: white; border: none; border-radius: 5px; cursor: pointer; }
-                        button:hover { background: #128C7E; }
                     </style>
                 </head>
                 <body>
                     <div class="container">
                         <h2>📱 Scannez le QR Code</h2>
-                        <div class="client-info">
-                            <p><strong>Client:</strong> \${clientId}</p>
-                            <p><strong>Numéro:</strong> \${phoneNumber}</p>
-                        </div>
-                        <div class="instructions">
-                            <p>Ouvrez WhatsApp sur votre téléphone et scannez ce QR code pour connecter votre compte.</p>
-                        </div>
+                        <p><strong>Client:</strong> ${clientId} | <strong>Numéro:</strong> ${phoneNumber}</p>
                         <div class="qr-code">
-                            <img src="\${qrImage}" alt="QR Code">
+                            <img src="${qrImage}" alt="QR Code">
                         </div>
-                        <div class="refresh-btn">
-                            <button onclick="location.reload()">↻ Actualiser</button>
-                        </div>
-                        <p>Si le QR code n'apparaît pas, attendez quelques secondes et actualisez la page.</p>
+                        <p>Ouvrez WhatsApp → Paramètres → Appareils connectés → Connecter un appareil</p>
+                        <button onclick="location.reload()">↻ Actualiser</button>
                     </div>
                 </body>
                 </html>
@@ -251,21 +234,11 @@ app.get('/scan-qr', async (req, res) => {
             <head>
                 <meta charset="UTF-8">
                 <title>Génération QR - StockAlert</title>
-                <style>
-                    body { font-family: Arial; text-align: center; margin-top: 50px; }
-                    .loading { color: #25D366; }
-                    .spinner { font-size: 2em; margin: 20px; }
-                </style>
             </head>
             <body>
                 <h2>⏳ Génération du QR Code en cours...</h2>
-                <div class="spinner">⏳</div>
-                <p class="loading">Veuillez patienter, cela peut prendre quelques secondes...</p>
-                <script>
-                    setTimeout(() => {
-                        location.reload();
-                    }, 3000);
-                </script>
+                <p>Veuillez patienter...</p>
+                <script>setTimeout(() => location.reload(), 3000);</script>
             </body>
             </html>
         `);
@@ -278,3 +251,55 @@ app.get('/scan-qr', async (req, res) => {
             <head>
                 <meta charset="UTF-8">
                 <title>Erreur - StockAlert</title>
+            </head>
+            <body>
+                <h2>❌ Erreur serveur</h2>
+                <p>${err.message}</p>
+            </body>
+            </html>
+        `);
+    }
+});
+
+// Endpoint pour envoyer une alerte
+app.post('/send-alert', async (req, res) => {
+    try {
+        const { clientId, phone, message } = req.body;
+
+        if (!clientId || !phone || !message) {
+            return res.status(400).json({ error: 'clientId, phone et message sont requis' });
+        }
+
+        let instance = instances.get(clientId);
+        if (!instance) {
+            instance = await initInstance(clientId, phone);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+        if (!instance.connected) {
+            return res.status(503).json({
+                error: 'WhatsApp non connecté',
+                solution: `Scannez d'abord le QR: https://whatsapp-alerts-production-7426.up.railway.app/scan-qr?id=${clientId}&phone=${encodeURIComponent(phone)}`
+            });
+        }
+
+        const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
+        await instance.sock.sendMessage(jid, { text: message });
+
+        res.json({
+            success: true,
+            message: 'Alerte envoyée avec succès',
+            clientId: clientId,
+            sentTo: jid
+        });
+
+    } catch (err) {
+        console.error('Erreur /send-alert:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+    console.log(`🌐 URL: https://whatsapp-alerts-production-7426.up.railway.app`);
+});
