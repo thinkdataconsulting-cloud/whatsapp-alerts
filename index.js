@@ -40,18 +40,14 @@ if (!globalThis.crypto) {
     };
 }
 
-async function initInstance(clientId) {
-    // Si l'instance existe déjà et est connectée, on la retourne
+async function initInstance(clientId, phoneNumber) {
     if (instances.has(clientId)) {
         const instance = instances.get(clientId);
-        if (instance.connected) {
-            return instance;
-        }
-        // Si elle existe mais n'est pas connectée, on la supprime pour en créer une nouvelle
-        instances.delete(clientId);
+        if (instance.connected) return instance;
+        instances.delete(clientId); // Supprime l'instance déconnectée
     }
 
-    console.log(`🚀 Initialisation de ${clientId}`);
+    console.log(`🚀 Initialisation de ${clientId} (${phoneNumber})`);
 
     const authDir = path.join(process.cwd(), `auth_${clientId}`);
     if (!fs.existsSync(authDir)) {
@@ -62,11 +58,10 @@ async function initInstance(clientId) {
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,  // IMPORTANT: Active la génération du QR
         logger: pino({ level: 'error' }),
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
-        markOnlineOnConnect: false,  // Désactive pour éviter les problèmes
+        markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false
     });
 
@@ -74,15 +69,14 @@ async function initInstance(clientId) {
         sock,
         qr: null,
         connected: false,
-        authDir
+        authDir,
+        phoneNumber
     };
 
     instances.set(clientId, instance);
 
-    // Événement pour les crédentials
     sock.ev.on('creds.update', saveCreds);
 
-    // Événement principal pour la connexion
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -103,13 +97,10 @@ async function initInstance(clientId) {
 
             if (statusCode === DisconnectReason.loggedOut) {
                 console.log(`🔴 ${clientId} déconnecté (logout)`);
-                try {
-                    fs.rmSync(authDir, { recursive: true, force: true });
-                } catch (e) {}
+                try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (e) {}
                 instances.delete(clientId);
             } else {
-                console.log(`🟡 ${clientId} déconnecté temporairement, reconnexion...`);
-                // On ne relance PAS automatiquement ici pour éviter les boucles
+                console.log(`🟡 ${clientId} déconnecté temporairement`);
             }
         }
     });
@@ -117,54 +108,30 @@ async function initInstance(clientId) {
     return instance;
 }
 
-app.get('/', (req, res) => {
-    res.json({
-        status: 'active',
-        message: 'WhatsApp Alerts API Active',
-        endpoints: {
-            status: '/status/:clientId',
-            qr: '/qr?id=clientId',
-            sendAlert: '/send-alert/:clientId'
-        }
-    });
-});
-
-app.get('/status/:clientId', async (req, res) => {
-    const clientId = req.params.clientId;
-    const instance = instances.get(clientId);
-
-    if (!instance) {
-        return res.json({ exists: false });
-    }
-
-    res.json({
-        exists: true,
-        connected: instance.connected,
-        hasQr: !!instance.qr
-    });
-});
-
+// Endpoint pour obtenir le QR code d'un client
 app.get('/qr', async (req, res) => {
     try {
         const clientId = req.query.id;
+        const phoneNumber = req.query.phone;
 
-        if (!clientId) {
-            return res.status(400).json({ error: 'ID manquant' });
+        if (!clientId || !phoneNumber) {
+            return res.status(400).json({
+                error: 'ID et phone sont requis',
+                example: '/qr?id=Client_A&phone=+22791848270'
+            });
         }
 
-        // Initialise l'instance si elle n'existe pas
         let instance = instances.get(clientId);
         if (!instance) {
-            instance = await initInstance(clientId);
+            instance = await initInstance(clientId, phoneNumber);
         }
 
-        // Attend jusqu'à 10 secondes pour le QR
+        // Attend le QR pendant 15 secondes max
         const startTime = Date.now();
-        while (!instance.qr && !instance.connected && (Date.now() - startTime) < 10000) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+        while (!instance.qr && !instance.connected && (Date.now() - startTime) < 15000) {
+            await new Promise(resolve => setTimeout(resolve, 300));
         }
 
-        // Vérifie à nouveau
         instance = instances.get(clientId);
         if (!instance) {
             return res.status(500).json({ error: 'Instance perdue' });
@@ -182,14 +149,15 @@ app.get('/qr', async (req, res) => {
             return res.json({
                 status: 'qr_ready',
                 qrCode: qrImage,
-                message: 'Scannez ce QR code avec WhatsApp',
-                clientId: clientId
+                message: `Scannez ce QR code avec WhatsApp pour ${clientId}`,
+                clientId: clientId,
+                phoneNumber: instance.phoneNumber
             });
         }
 
         return res.status(500).json({
             error: 'Échec de la génération du QR code',
-            details: 'Le QR code n\'a pas été généré dans le temps imparti'
+            details: 'Le QR code n\'a pas été généré dans le temps imparti (15s)'
         });
 
     } catch (err) {
@@ -198,64 +166,75 @@ app.get('/qr', async (req, res) => {
     }
 });
 
-app.post('/send-alert/:clientId', async (req, res) => {
+// Endpoint pour envoyer une alerte
+app.post('/send-alert', async (req, res) => {
     try {
-        const clientId = req.params.clientId;
-        const { phone, product, quantity, supplier, threshold, orderld } = req.body;
+        const { clientId, phone, message } = req.body;
 
-        const instance = instances.get(clientId);
+        if (!clientId || !phone || !message) {
+            return res.status(400).json({
+                error: 'clientId, phone et message sont requis'
+            });
+        }
+
+        let instance = instances.get(clientId);
         if (!instance) {
-            return res.status(404).json({ error: 'Instance inexistante' });
+            // Initialise l'instance si elle n'existe pas
+            instance = await initInstance(clientId, phone);
+            // Attend 2 secondes pour laisser le temps de générer le QR
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
         if (!instance.connected) {
             return res.status(503).json({
-                error: 'WhatsApp non connecté',
-                solution: `Scannez d'abord le QR code via /qr?id=${clientId}`
+                error: 'WhatsApp non connecté pour ce client',
+                solution: `Scannez d'abord le QR code via /qr?id=${clientId}&phone=${encodeURIComponent(phone)}`
             });
         }
 
         const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
 
-        const messageContent = {
-            text: `🚨 *ALERTE STOCK FAIBLE* 🚨\n\n📦 *Produit*: ${product}\n📊 *Quantité*: ${quantity}\n⚠️ *Seuil*: ${threshold}\n🏪 *Fournisseur*: ${supplier}\n\nPasser une commande ?`,
+        await instance.sock.sendMessage(jid, {
+            text: message,
             buttons: [
-                { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui, commander' }, type: 1 },
-                { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non, ignorer' }, type: 1 }
-            ],
-            footer: 'StockAlert System'
-        };
-
-        await instance.sock.sendMessage(jid, messageContent);
+                { buttonId: 'confirm_order', buttonText: { displayText: '✅ Oui' }, type: 1 },
+                { buttonId: 'cancel_order', buttonText: { displayText: '❌ Non' }, type: 1 }
+            ]
+        });
 
         res.json({
             success: true,
             message: 'Alerte envoyée avec succès',
-            orderId: orderld || `ORDER-${product}-${Date.now()}`
+            clientId: clientId,
+            sentTo: jid
         });
 
     } catch (err) {
         console.error('Erreur /send-alert:', err);
         res.status(500).json({
             error: err.message,
-            details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
         });
     }
 });
 
-// Endpoint pour forcer la reconnexion
-app.post('/reconnect/:clientId', async (req, res) => {
-    try {
-        const clientId = req.params.clientId;
-        instances.delete(clientId);
-        await initInstance(clientId);
-        res.json({ success: true, message: 'Reconnexion initiée' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+// Endpoint pour vérifier le statut
+app.get('/status/:clientId', async (req, res) => {
+    const clientId = req.params.clientId;
+    const instance = instances.get(clientId);
+
+    if (!instance) {
+        return res.json({ exists: false });
     }
+
+    res.json({
+        exists: true,
+        connected: instance.connected,
+        phoneNumber: instance.phoneNumber
+    });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-    console.log(`🌐 URL: https://whatsapp-alerts-production-af15.up.railway.app`);
+    console.log(`🌐 URL: https://whatsapp-alerts-production-7426.up.railway.app`);
 });
