@@ -15,7 +15,7 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Désactive le cache pour toutes les routes
+// Désactive le cache
 app.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -41,14 +41,14 @@ if (!globalThis.crypto) {
 }
 
 async function initInstance(clientId) {
+    // Si l'instance existe déjà et est connectée, on la retourne
     if (instances.has(clientId)) {
         const instance = instances.get(clientId);
-        // Si l'instance existe mais n'est pas connectée, on la réinitialise
-        if (!instance.connected && !instance.qr) {
-            instances.delete(clientId);
-        } else {
+        if (instance.connected) {
             return instance;
         }
+        // Si elle existe mais n'est pas connectée, on la supprime pour en créer une nouvelle
+        instances.delete(clientId);
     }
 
     console.log(`🚀 Initialisation de ${clientId}`);
@@ -62,12 +62,12 @@ async function initInstance(clientId) {
 
     const sock = makeWASocket({
         auth: state,
-        logger: pino({ level: 'silent' }),
+        printQRInTerminal: true,  // IMPORTANT: Active la génération du QR
+        logger: pino({ level: 'error' }),
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
-        markOnlineOnConnect: true,
-        generateHighQualityLinkPreview: false,
-        printQRInTerminal: false
+        markOnlineOnConnect: false,  // Désactive pour éviter les problèmes
+        generateHighQualityLinkPreview: false
     });
 
     const instance = {
@@ -79,8 +79,10 @@ async function initInstance(clientId) {
 
     instances.set(clientId, instance);
 
+    // Événement pour les crédentials
     sock.ev.on('creds.update', saveCreds);
 
+    // Événement principal pour la connexion
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -90,7 +92,7 @@ async function initInstance(clientId) {
         }
 
         if (connection === 'open') {
-            console.log(`✅ ${clientId} connecté`);
+            console.log(`✅ ${clientId} connecté avec succès !`);
             instance.connected = true;
             instance.qr = null;
         }
@@ -99,18 +101,15 @@ async function initInstance(clientId) {
             instance.connected = false;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
 
-            if (statusCode !== DisconnectReason.loggedOut) {
-                console.log(`🔄 Reconnexion de ${clientId} dans 10 secondes`);
-                setTimeout(() => {
-                    instances.delete(clientId);
-                    initInstance(clientId).catch(console.error);
-                }, 10000);
-            } else {
-                console.log(`🗑️ Session supprimée pour ${clientId}`);
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.log(`🔴 ${clientId} déconnecté (logout)`);
                 try {
                     fs.rmSync(authDir, { recursive: true, force: true });
                 } catch (e) {}
                 instances.delete(clientId);
+            } else {
+                console.log(`🟡 ${clientId} déconnecté temporairement, reconnexion...`);
+                // On ne relance PAS automatiquement ici pour éviter les boucles
             }
         }
     });
@@ -153,18 +152,22 @@ app.get('/qr', async (req, res) => {
             return res.status(400).json({ error: 'ID manquant' });
         }
 
-        // Force l'initialisation de l'instance
+        // Initialise l'instance si elle n'existe pas
         let instance = instances.get(clientId);
         if (!instance) {
             instance = await initInstance(clientId);
-            // Attend 2 secondes pour laisser le temps de générer le QR
-            await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
-        // Vérifie à nouveau après l'initialisation
+        // Attend jusqu'à 10 secondes pour le QR
+        const startTime = Date.now();
+        while (!instance.qr && !instance.connected && (Date.now() - startTime) < 10000) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        // Vérifie à nouveau
         instance = instances.get(clientId);
         if (!instance) {
-            return res.status(500).json({ error: 'Échec de l\'initialisation' });
+            return res.status(500).json({ error: 'Instance perdue' });
         }
 
         if (instance.connected) {
@@ -179,17 +182,14 @@ app.get('/qr', async (req, res) => {
             return res.json({
                 status: 'qr_ready',
                 qrCode: qrImage,
-                message: 'Scannez ce QR code avec WhatsApp'
+                message: 'Scannez ce QR code avec WhatsApp',
+                clientId: clientId
             });
         }
 
-        // Si on arrive ici, c'est que le QR n'est pas encore prêt
-        // On attend 1 seconde et on réessaye
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        return res.json({
-            status: 'waiting',
-            message: 'Génération du QR code en cours...',
-            retryAfter: 1000
+        return res.status(500).json({
+            error: 'Échec de la génération du QR code',
+            details: 'Le QR code n\'a pas été généré dans le temps imparti'
         });
 
     } catch (err) {
@@ -201,7 +201,7 @@ app.get('/qr', async (req, res) => {
 app.post('/send-alert/:clientId', async (req, res) => {
     try {
         const clientId = req.params.clientId;
-        const { phone, message, product, quantity, supplier, threshold, orderld } = req.body;
+        const { phone, product, quantity, supplier, threshold, orderld } = req.body;
 
         const instance = instances.get(clientId);
         if (!instance) {
@@ -211,7 +211,7 @@ app.post('/send-alert/:clientId', async (req, res) => {
         if (!instance.connected) {
             return res.status(503).json({
                 error: 'WhatsApp non connecté',
-                solution: 'Scannez d\'abord le QR code via /qr?id=' + clientId
+                solution: `Scannez d'abord le QR code via /qr?id=${clientId}`
             });
         }
 
@@ -240,6 +240,18 @@ app.post('/send-alert/:clientId', async (req, res) => {
             error: err.message,
             details: process.env.NODE_ENV === 'development' ? err.stack : undefined
         });
+    }
+});
+
+// Endpoint pour forcer la reconnexion
+app.post('/reconnect/:clientId', async (req, res) => {
+    try {
+        const clientId = req.params.clientId;
+        instances.delete(clientId);
+        await initInstance(clientId);
+        res.json({ success: true, message: 'Reconnexion initiée' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 });
 
