@@ -8,18 +8,24 @@ app.use(express.json());
 const PORT = process.env.PORT || 8080;
 
 const authDir = './auth_store';
-let sock;
+let sock = null; // Initialisé à null
 let qrCodeValue = null;
 let isConnected = false;
-let clientNumber = null; // Stocke le numéro autorisé
+let clientNumber = null;
 
 async function startSock() {
+    // Si une socket existe déjà, on la ferme avant d'en créer une nouvelle
+    if (sock) {
+        try { await sock.end(); } catch (e) {}
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: Browsers.ubuntu('Chrome')
+        browser: Browsers.ubuntu('Chrome'),
+        generateHighQualityLinkPreview: true
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -35,8 +41,7 @@ async function startSock() {
         if (connection === 'open') {
             isConnected = true;
             qrCodeValue = null;
-            // On récupère le numéro une fois connecté
-            clientNumber = sock.user.id.split(':')[0];
+            clientNumber = sock.user?.id?.split(':')[0] || 'Inconnu';
             console.log(`✅ WhatsApp connecté pour : ${clientNumber}`);
         }
         
@@ -44,32 +49,25 @@ async function startSock() {
             isConnected = false;
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                console.log('🔄 Session perdue, en attente de reconnexion...');
-                startSock(); 
+                console.log('🔄 Session perdue, reconnexion dans 10 secondes...');
+                // Délai plus long pour éviter de saturer le processeur
+                setTimeout(startSock, 10000); 
             }
         }
     });
 }
 
-// Endpoint pour scanner (regenerable si deconnecté)
 app.get('/scan-qr', async (req, res) => {
-    if (isConnected) return res.send(`<h1>✅ Déjà connecté avec le numéro : ${clientNumber}</h1>`);
-    if (!qrCodeValue) return res.send('<h1>🔄 Génération du QR... patientez.</h1><script>setTimeout(()=>location.reload(), 2000)</script>');
+    if (isConnected) return res.send(`<h1>✅ Connecté : ${clientNumber}</h1>`);
+    if (!qrCodeValue) return res.send('<h1>🔄 Génération du QR... patientez.</h1><script>setTimeout(()=>location.reload(), 5000)</script>');
     
     const url = await qrcode.toDataURL(qrCodeValue);
-    res.send(`<h1>Scan QR pour votre numéro</h1><img src="${url}"><p>Une fois scanné, la page sera confirmée.</p><script>setTimeout(()=>location.reload(), 3000)</script>`);
+    res.send(`<h1>Scan QR</h1><img src="${url}"><script>setTimeout(()=>location.reload(), 5000)</script>`);
 });
 
-// Endpoint sécurisé avec vérification de numéro
 app.post('/send-alert', async (req, res) => {
-    const { phone, message, authorizedPhone } = req.body;
-    
+    const { phone, message } = req.body;
     if (!isConnected) return res.status(503).json({ error: 'WhatsApp non connecté.' });
-
-    // Sécurité : Vérifie que le numéro qui envoie est bien le numéro autorisé (celui du client)
-    if (authorizedPhone && phone.replace(/\D/g, '') !== authorizedPhone.replace(/\D/g, '')) {
-        return res.status(403).json({ error: 'Numéro non autorisé pour cette session.' });
-    }
     
     try {
         const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
@@ -81,6 +79,6 @@ app.post('/send-alert', async (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Serveur actif`);
+    console.log(`🚀 Serveur actif sur le port ${PORT}`);
     startSock();
 });
