@@ -10,6 +10,7 @@
     "@whiskeysockets/baileys": "^6.7.9",
     "express": "^4.21.2",
     "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
     "qrcode": "^1.5.4"
   }
 }
