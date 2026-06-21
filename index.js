@@ -2,90 +2,78 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers
 const express = require('express');
 const qrcode = require('qrcode');
 const pino = require('pino');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 8080;
-const instances = new Map();
 
-// Charger automatiquement toutes les sessions existantes au démarrage
-function loadExistingSessions() {
-    const authFolder = process.cwd();
-    fs.readdirSync(authFolder).forEach(file => {
-        if (file.startsWith('auth_')) {
-            const clientId = file.replace('auth_', '');
-            initInstance(clientId, null); // Chargement silencieux
-        }
-    });
-}
+const authDir = './auth_store';
+let sock;
+let qrCodeValue = null;
+let isConnected = false;
+let clientNumber = null; // Stocke le numéro autorisé
 
-async function initInstance(clientId, phoneNumber) {
-    if (instances.has(clientId)) return instances.get(clientId);
-
-    const authDir = path.join(process.cwd(), `auth_${clientId}`);
+async function startSock() {
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    const sock = makeWASocket({
+    sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: Browsers.ubuntu('Chrome'),
-        printQRInTerminal: false
+        browser: Browsers.ubuntu('Chrome')
     });
-
-    const instance = { sock, qr: null, connected: false };
-    instances.set(clientId, instance);
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, qr, lastDisconnect } = update;
-        if (qr) instance.qr = qr;
-        if (connection === 'open') {
-            instance.connected = true;
-            instance.qr = null;
+        
+        if (qr) {
+            qrCodeValue = qr;
+            isConnected = false;
         }
+        
+        if (connection === 'open') {
+            isConnected = true;
+            qrCodeValue = null;
+            // On récupère le numéro une fois connecté
+            clientNumber = sock.user.id.split(':')[0];
+            console.log(`✅ WhatsApp connecté pour : ${clientNumber}`);
+        }
+        
         if (connection === 'close') {
-            instance.connected = false;
-            // Si déconnecté, on tente de reconnecter automatiquement
-            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-                setTimeout(() => initInstance(clientId, phoneNumber), 5000);
+            isConnected = false;
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) {
+                console.log('🔄 Session perdue, en attente de reconnexion...');
+                startSock(); 
             }
         }
     });
-
-    return instance;
 }
 
-// Route pour générer le QR
+// Endpoint pour scanner (regenerable si deconnecté)
 app.get('/scan-qr', async (req, res) => {
-    const { id: clientId, phone } = req.query;
-    if (!clientId) return res.status(400).send('ID client requis');
+    if (isConnected) return res.send(`<h1>✅ Déjà connecté avec le numéro : ${clientNumber}</h1>`);
+    if (!qrCodeValue) return res.send('<h1>🔄 Génération du QR... patientez.</h1><script>setTimeout(()=>location.reload(), 2000)</script>');
     
-    let instance = instances.get(clientId) || await initInstance(clientId, phone);
-    
-    if (instance.connected) return res.send('✅ Déjà connecté');
-    if (instance.qr) {
-        const url = await qrcode.toDataURL(instance.qr);
-        res.send(`<img src="${url}"> <script>setTimeout(()=>location.reload(), 5000)</script>`);
-    } else {
-        res.send('🔄 Initialisation... patientez et rafraîchissez.');
-    }
+    const url = await qrcode.toDataURL(qrCodeValue);
+    res.send(`<h1>Scan QR pour votre numéro</h1><img src="${url}"><p>Une fois scanné, la page sera confirmée.</p><script>setTimeout(()=>location.reload(), 3000)</script>`);
 });
 
-// Route POST pour n8n
+// Endpoint sécurisé avec vérification de numéro
 app.post('/send-alert', async (req, res) => {
-    const { clientId, phone, message } = req.body;
-    const instance = instances.get(clientId);
+    const { phone, message, authorizedPhone } = req.body;
+    
+    if (!isConnected) return res.status(503).json({ error: 'WhatsApp non connecté.' });
 
-    if (!instance || !instance.connected) {
-        return res.status(503).json({ error: 'Instance non prête. Scannez le QR.' });
+    // Sécurité : Vérifie que le numéro qui envoie est bien le numéro autorisé (celui du client)
+    if (authorizedPhone && phone.replace(/\D/g, '') !== authorizedPhone.replace(/\D/g, '')) {
+        return res.status(403).json({ error: 'Numéro non autorisé pour cette session.' });
     }
-
+    
     try {
         const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
-        await instance.sock.sendMessage(jid, { text: message });
+        await sock.sendMessage(jid, { text: message });
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -94,5 +82,5 @@ app.post('/send-alert', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Serveur actif`);
-    loadExistingSessions();
+    startSock();
 });
