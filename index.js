@@ -8,77 +8,64 @@ app.use(express.json());
 const PORT = process.env.PORT || 8080;
 
 const authDir = './auth_store';
-let sock = null; // Initialisé à null
+let sock = null;
 let qrCodeValue = null;
 let isConnected = false;
-let clientNumber = null;
 
 async function startSock() {
-    // Si une socket existe déjà, on la ferme avant d'en créer une nouvelle
-    if (sock) {
-        try { await sock.end(); } catch (e) {}
-    }
-
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: Browsers.ubuntu('Chrome'),
-        generateHighQualityLinkPreview: true
+        // Simulation d'un vrai navigateur Chrome Linux
+        browser: ["Chrome (Linux)", "Chrome", "116.0.0.0"], 
+        patchMessageBeforeSending: (msg) => {
+            const needsPatch = !!(msg.buttonsMessage || msg.templateMessage || msg.listMessage);
+            if (needsPatch) {
+                msg = { ...msg, viewOnceMessage: { message: { messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {}, }, ...msg } } };
+            }
+            return msg;
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, qr, lastDisconnect } = update;
-        
-        if (qr) {
-            qrCodeValue = qr;
-            isConnected = false;
-        }
-        
+        if (qr) qrCodeValue = qr;
         if (connection === 'open') {
             isConnected = true;
             qrCodeValue = null;
-            clientNumber = sock.user?.id?.split(':')[0] || 'Inconnu';
-            console.log(`✅ WhatsApp connecté pour : ${clientNumber}`);
+            console.log('✅ WhatsApp connecté !');
         }
-        
         if (connection === 'close') {
             isConnected = false;
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log('🔄 Session perdue, reconnexion dans 10 secondes...');
-                // Délai plus long pour éviter de saturer le processeur
-                setTimeout(startSock, 10000); 
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+                setTimeout(startSock, 15000); // 15 secondes pour laisser le temps à l'IP de respirer
             }
         }
     });
 }
 
-app.get('/scan-qr', async (req, res) => {
-    if (isConnected) return res.send(`<h1>✅ Connecté : ${clientNumber}</h1>`);
-    if (!qrCodeValue) return res.send('<h1>🔄 Génération du QR... patientez.</h1><script>setTimeout(()=>location.reload(), 5000)</script>');
-    
-    const url = await qrcode.toDataURL(qrCodeValue);
-    res.send(`<h1>Scan QR</h1><img src="${url}"><script>setTimeout(()=>location.reload(), 5000)</script>`);
+app.get('/scan-qr', (req, res) => {
+    if (isConnected) return res.send('<h1>✅ Connecté</h1>');
+    if (!qrCodeValue) return res.send('<h1>🔄 Initialisation...</h1><script>setTimeout(()=>location.reload(), 5000)</script>');
+    qrcode.toDataURL(qrCodeValue).then(url => {
+        res.send(`<h1>Scan QR</h1><img src="${url}"><script>setTimeout(()=>location.reload(), 5000)</script>`);
+    });
 });
 
 app.post('/send-alert', async (req, res) => {
     const { phone, message } = req.body;
-    if (!isConnected) return res.status(503).json({ error: 'WhatsApp non connecté.' });
-    
+    if (!isConnected) return res.status(503).json({ error: 'Non connecté' });
     try {
-        const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
-        await sock.sendMessage(jid, { text: message });
+        await sock.sendMessage(phone.replace(/\D/g, '') + '@s.whatsapp.net', { text: message });
         res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Serveur actif sur le port ${PORT}`);
+    console.log(`🚀 Serveur actif`);
     startSock();
 });
