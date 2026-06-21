@@ -15,6 +15,14 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Désactive le cache pour toutes les routes
+app.use((req, res, next) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+});
+
 const PORT = process.env.PORT || 8080;
 const instances = new Map();
 
@@ -34,7 +42,13 @@ if (!globalThis.crypto) {
 
 async function initInstance(clientId) {
     if (instances.has(clientId)) {
-        return instances.get(clientId);
+        const instance = instances.get(clientId);
+        // Si l'instance existe mais n'est pas connectée, on la réinitialise
+        if (!instance.connected && !instance.qr) {
+            instances.delete(clientId);
+        } else {
+            return instance;
+        }
     }
 
     console.log(`🚀 Initialisation de ${clientId}`);
@@ -59,7 +73,8 @@ async function initInstance(clientId) {
     const instance = {
         sock,
         qr: null,
-        connected: false
+        connected: false,
+        authDir
     };
 
     instances.set(clientId, instance);
@@ -86,7 +101,10 @@ async function initInstance(clientId) {
 
             if (statusCode !== DisconnectReason.loggedOut) {
                 console.log(`🔄 Reconnexion de ${clientId} dans 10 secondes`);
-                setTimeout(() => initInstance(clientId), 10000);
+                setTimeout(() => {
+                    instances.delete(clientId);
+                    initInstance(clientId).catch(console.error);
+                }, 10000);
             } else {
                 console.log(`🗑️ Session supprimée pour ${clientId}`);
                 try {
@@ -135,9 +153,18 @@ app.get('/qr', async (req, res) => {
             return res.status(400).json({ error: 'ID manquant' });
         }
 
+        // Force l'initialisation de l'instance
         let instance = instances.get(clientId);
         if (!instance) {
             instance = await initInstance(clientId);
+            // Attend 2 secondes pour laisser le temps de générer le QR
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+        // Vérifie à nouveau après l'initialisation
+        instance = instances.get(clientId);
+        if (!instance) {
+            return res.status(500).json({ error: 'Échec de l\'initialisation' });
         }
 
         if (instance.connected) {
@@ -150,19 +177,23 @@ app.get('/qr', async (req, res) => {
         if (instance.qr) {
             const qrImage = await qrcode.toDataURL(instance.qr);
             return res.json({
-                qrCode: qrImage,
                 status: 'qr_ready',
+                qrCode: qrImage,
                 message: 'Scannez ce QR code avec WhatsApp'
             });
         }
 
+        // Si on arrive ici, c'est que le QR n'est pas encore prêt
+        // On attend 1 seconde et on réessaye
+        await new Promise(resolve => setTimeout(resolve, 1000));
         return res.json({
             status: 'waiting',
-            message: 'Génération du QR code en cours...'
+            message: 'Génération du QR code en cours...',
+            retryAfter: 1000
         });
 
     } catch (err) {
-        console.error(err);
+        console.error('Erreur /qr:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -186,7 +217,6 @@ app.post('/send-alert/:clientId', async (req, res) => {
 
         const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
 
-        // Formatage du message avec boutons
         const messageContent = {
             text: `🚨 *ALERTE STOCK FAIBLE* 🚨\n\n📦 *Produit*: ${product}\n📊 *Quantité*: ${quantity}\n⚠️ *Seuil*: ${threshold}\n🏪 *Fournisseur*: ${supplier}\n\nPasser une commande ?`,
             buttons: [
@@ -198,22 +228,6 @@ app.post('/send-alert/:clientId', async (req, res) => {
 
         await instance.sock.sendMessage(jid, messageContent);
 
-        // Stocke la commande pour les réponses aux boutons
-        if (orderld) {
-            instance.sock.ev.on('messages.upsert', async (m) => {
-                const msg = m.messages[0];
-                if (msg.key.fromMe) return;
-
-                const buttonResponse = msg.message?.buttonsResponseMessage;
-                if (buttonResponse && buttonResponse.id === orderld) {
-                    const responseText = buttonResponse.selectedButtonId === 'confirm_order'
-                        ? `✅ COMMANDE CONFIRMÉE pour ${product}`
-                        : `❌ Commande annulée pour ${product}`;
-                    await instance.sock.sendMessage(jid, { text: responseText });
-                }
-            });
-        }
-
         res.json({
             success: true,
             message: 'Alerte envoyée avec succès',
@@ -221,7 +235,7 @@ app.post('/send-alert/:clientId', async (req, res) => {
         });
 
     } catch (err) {
-        console.error(err);
+        console.error('Erreur /send-alert:', err);
         res.status(500).json({
             error: err.message,
             details: process.env.NODE_ENV === 'development' ? err.stack : undefined
