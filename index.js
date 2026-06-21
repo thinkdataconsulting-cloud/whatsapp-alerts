@@ -8,17 +8,22 @@ app.use(express.json());
 const PORT = process.env.PORT || 8080;
 
 const authDir = './auth_store';
-let sock = null;
+let sock = null; // Important pour gérer les reconnexions
 let qrCodeValue = null;
 let isConnected = false;
 
 async function startSock() {
+    // Nettoyage de l'ancienne socket si elle existe
+    if (sock) {
+        try { await sock.end(); } catch (e) {}
+        sock = null;
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
-        // Simulation d'un vrai navigateur Chrome Linux
         browser: ["Chrome (Linux)", "Chrome", "116.0.0.0"], 
         patchMessageBeforeSending: (msg) => {
             const needsPatch = !!(msg.buttonsMessage || msg.templateMessage || msg.listMessage);
@@ -33,16 +38,26 @@ async function startSock() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, qr, lastDisconnect } = update;
-        if (qr) qrCodeValue = qr;
+        
+        if (qr) {
+            qrCodeValue = qr;
+            isConnected = false;
+        }
+        
         if (connection === 'open') {
             isConnected = true;
             qrCodeValue = null;
             console.log('✅ WhatsApp connecté !');
         }
+        
         if (connection === 'close') {
             isConnected = false;
+            // Si ce n'est pas un logout volontaire, on tente de relancer
             if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-                setTimeout(startSock, 15000); // 15 secondes pour laisser le temps à l'IP de respirer
+                console.log('🔄 Connexion perdue, tentative de reconnexion dans 15s...');
+                setTimeout(startSock, 15000);
+            } else {
+                console.log('❌ Déconnecté (Logout).');
             }
         }
     });
@@ -51,21 +66,26 @@ async function startSock() {
 app.get('/scan-qr', (req, res) => {
     if (isConnected) return res.send('<h1>✅ Connecté</h1>');
     if (!qrCodeValue) return res.send('<h1>🔄 Initialisation...</h1><script>setTimeout(()=>location.reload(), 5000)</script>');
+    
     qrcode.toDataURL(qrCodeValue).then(url => {
         res.send(`<h1>Scan QR</h1><img src="${url}"><script>setTimeout(()=>location.reload(), 5000)</script>`);
-    });
+    }).catch(err => res.status(500).send('Erreur QR'));
 });
 
 app.post('/send-alert', async (req, res) => {
     const { phone, message } = req.body;
-    if (!isConnected) return res.status(503).json({ error: 'Non connecté' });
+    if (!isConnected || !sock) return res.status(503).json({ error: 'WhatsApp non connecté' });
+    
     try {
-        await sock.sendMessage(phone.replace(/\D/g, '') + '@s.whatsapp.net', { text: message });
+        const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
+        await sock.sendMessage(jid, { text: message });
         res.json({ success: true });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) { 
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Serveur actif`);
+    console.log(`🚀 Serveur actif sur le port ${PORT}`);
     startSock();
 });
